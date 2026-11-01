@@ -157,6 +157,15 @@ await panel.mouse.move(370, 5); // off the list, so it refreshes
 await page.waitForTimeout(300);
 assert.equal((await zappedTexts()).length, initial.length - 1, 'Show restored one block');
 
+// The Lens tab on a lens that has never been saved (no versionHistory yet):
+// an edit must show as saveable, not as invalid.
+await tab('Lens');
+await panel.fill('input[aria-label="New interest"]', 'first edit');
+await panel.click('.prio button:text-is("Add")');
+assert.equal(await panel.locator('.error').count(), 0, 'a fresh lens edit is not reported invalid');
+assert.equal(await panel.isEnabled('button:text-is("Save new version")'), true);
+await panel.click('button:text-is("Discard edits")');
+
 // The confidence slider re-decides the page while it moves, with no reload.
 await tab('Interests');
 await panel.focus('input[aria-label^="Zap when"]');

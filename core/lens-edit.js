@@ -176,17 +176,28 @@ export function lensChanges(before, after) {
  *          null when the edit changes nothing.
  */
 export async function commitEdit(manifest, edited, { sha256, now = new Date() }) {
+  const next = withToolFields(manifest, edited);
+  const changes = lensChanges(manifest, next);
+  if (changes.length === 0) return null;
+  const impact = changes.reduce((m, c) => (IMPACT_RANK[c.impact] > IMPACT_RANK[m] ? c.impact : m), 'trivial');
+  return { ...(await finishVersion(manifest, next, impact, sha256, now)), changes, impact };
+}
+
+/**
+ * An edited lens with the fields the tool owns (lensVersion, modified,
+ * versionHistory) put back as they are in the current lens, and left out
+ * where the current lens has none. Validating this shows whether an edit
+ * is saveable before it is saved.
+ */
+export function withToolFields(manifest, edited) {
   if (!edited || typeof edited !== 'object' || Array.isArray(edited)) throw new Error('A lens must be a JSON object.');
   const next = structuredClone(edited);
   next.metadata = { ...(next.metadata ?? {}), lensVersion: manifest.metadata.lensVersion };
   if (manifest.metadata.modified) next.metadata.modified = manifest.metadata.modified;
   else delete next.metadata.modified;
-  if (manifest.versionHistory) next.versionHistory = manifest.versionHistory;
+  if (manifest.versionHistory) next.versionHistory = structuredClone(manifest.versionHistory);
   else delete next.versionHistory;
-  const changes = lensChanges(manifest, next);
-  if (changes.length === 0) return null;
-  const impact = changes.reduce((m, c) => (IMPACT_RANK[c.impact] > IMPACT_RANK[m] ? c.impact : m), 'trivial');
-  return { ...(await finishVersion(manifest, next, impact, sha256, now)), changes, impact };
+  return next;
 }
 
 async function finishVersion(manifest, next, impact, sha256, now) {
