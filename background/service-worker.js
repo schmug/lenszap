@@ -25,8 +25,13 @@ import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 const DEFAULT_SETTINGS = {
   threshold: 0.8,
   scorer: 'lexical',
+  // Display: score popover on hover, scoring and zapping animations, sidebar state.
+  hoverInfo: true,
+  animate: true,
+  sidebarCollapsed: false,
   // llama-server's decision endpoint; the model is whatever llama-server loaded.
-  model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '' }
+  // concurrency: requests in flight at once (match llama-server's --parallel).
+  model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '', concurrency: 4 }
 };
 
 async function bundledLens() {

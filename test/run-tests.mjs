@@ -38,6 +38,7 @@ import {
   modelScorerId
 } from '../core/model-scorer.js';
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
+import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES } from '../core/segment.js';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -392,6 +393,41 @@ await test('bench passages are labelled and fictional-lens compatible', () => {
   assert.ok(passages.length >= 20);
   for (const p of passages) assert.ok(['keep', 'zap', 'evidence'].includes(p.label), p.id);
   assert.equal(new Set(passages.map((p) => p.id)).size, passages.length);
+});
+
+await test('siteRule matches a host and its subdomains, and nothing else', () => {
+  assert.equal(siteRule('news.ycombinator.com')?.name, 'Hacker News');
+  assert.equal(siteRule('NEWS.ycombinator.com')?.name, 'Hacker News');
+  assert.equal(siteRule('ycombinator.com'), null);
+  assert.equal(siteRule('evilnews.ycombinator.com.example'), null);
+  assert.equal(siteRule('example.com'), null);
+  for (const r of SITE_RULES) for (const k of ['name', 'hosts', 'item', 'stop', 'structural']) assert.ok(r[k], `${r.name}.${k}`);
+});
+
+await test('groupWithFollowing takes an item and its rows up to the next stop', () => {
+  // title, subtext, spacer, title, subtext, morespace, more
+  const rows = ['athing', 'sub', 'spacer', 'athing', 'sub', 'morespace', 'more'].map((kind) => ({ kind }));
+  rows.forEach((r, i) => (r.nextElementSibling = rows[i + 1] ?? null));
+  const stop = (s) => s.kind === 'athing' || s.kind === 'morespace';
+  assert.deepEqual(groupWithFollowing(rows[0], stop).map((r) => r.kind), ['athing', 'sub', 'spacer']);
+  assert.deepEqual(groupWithFollowing(rows[3], stop).map((r) => r.kind), ['athing', 'sub']);
+  assert.deepEqual(groupWithFollowing(rows[6], stop).map((r) => r.kind), ['more']);
+});
+
+await test('scoringOrder: on screen top to bottom, then below nearest first, then above', () => {
+  const vh = 800;
+  const order = scoringOrder(
+    [
+      { id: 'above-far', top: -2000, bottom: -1800 },
+      { id: 'below-far', top: 3000, bottom: 3100 },
+      { id: 'visible-2', top: 400, bottom: 500 },
+      { id: 'above-near', top: -300, bottom: -100 },
+      { id: 'partly-visible', top: -50, bottom: 60 },
+      { id: 'below-near', top: 900, bottom: 1000 }
+    ],
+    vh
+  );
+  assert.deepEqual(order, ['partly-visible', 'visible-2', 'below-near', 'below-far', 'above-near', 'above-far']);
 });
 
 console.log(`zapper: ${passed} passed, ${failed} failed`);

@@ -8,8 +8,10 @@
 // Needs the `playwright` package and a Chromium it can launch. It serves
 // zapper/demo/ on 127.0.0.1, loads the unpacked extension, and checks that the
 // right blocks are hidden, that page controls and the correction never are,
-// that Before/After and Show work, and that saving an interest change writes
-// a valid new lens version.
+// that Before/After, Show, the hover popover, and live sliders work, that
+// saving an interest change writes a valid new lens version, that a site rule
+// makes each table-row story one block, and that a model is asked a few
+// blocks at a time.
 
 import { createServer } from 'node:http';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -28,6 +30,7 @@ const shots = process.argv.includes('--screenshots') ? join(zapperDir, 'screensh
 if (shots) mkdirSync(shots, { recursive: true });
 
 const html = readFileSync(join(zapperDir, 'demo/fixture.html'));
+const linkTable = readFileSync(join(zapperDir, 'demo/link-table.html'));
 const server = createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -67,6 +70,24 @@ async function clickPanel(text) {
   await page.mouse.click((x1 + x3) / 2, (y1 + y3) / 2);
 }
 
+async function findPanelNode(test) {
+  const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+  let found = null;
+  (function walk(n) {
+    if (found) return;
+    if (test(n)) found = n;
+    for (const k of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(k);
+  })(root);
+  return found;
+}
+const attrsOf = (n) => Object.fromEntries((n.attributes ?? []).reduce((acc, v, i, all) => (i % 2 ? acc : [...acc, [v, all[i + 1]]]), []));
+
+// Scoring and zapping animate; wait until every block has settled.
+const settle = async () => {
+  await page.waitForFunction(() => !document.querySelector('[data-lpz-zapping], [data-lpz-scoring]'), null, { timeout: 15000 });
+  await page.waitForTimeout(150);
+};
+
 const zappedTexts = () =>
   page.$$eval('[data-lpz-zapped]', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim().slice(0, 50)));
 const isZapped = (needle) =>
@@ -74,7 +95,10 @@ const isZapped = (needle) =>
 
 await page.goto(pageUrl);
 await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
-await page.waitForTimeout(300);
+await settle();
+
+// The sidebar docks on the right and the page makes room for it.
+assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).marginRight), '340px', 'page makes room for the sidebar');
 
 const initial = await zappedTexts();
 console.log(`Hidden on load (${initial.length}):\n  ${initial.join('\n  ')}`);
@@ -103,6 +127,18 @@ if (shots) await page.screenshot({ path: join(shots, 'before.jpg'), quality: 80 
 await clickPanel('After');
 assert.equal(await page.isVisible('text=mild weekend'), false);
 
+// Hovering a kept block shows its score and why it was kept.
+await page.hover('p:has-text("student information system is back online")');
+await page.waitForTimeout(400);
+const tipNode = await findPanelNode((n) => n.nodeName === 'DIV' && attrsOf(n).class === 'tip');
+assert.ok(tipNode && !('hidden' in attrsOf(tipNode)), 'hover popover shown');
+const tipHtml = (await cdp.send('DOM.getOuterHTML', { nodeId: tipNode.nodeId })).outerHTML;
+assert.match(tipHtml, /Kept/, 'popover says the block was kept');
+assert.match(tipHtml, /off-lens/, 'popover shows the off-lens score');
+assert.match(tipHtml, /school cybersecurity/, 'popover lists topic matches');
+if (shots) await page.screenshot({ path: join(shots, 'hover.jpg'), quality: 80 });
+await page.mouse.move(5, 5);
+
 // Show restores one block on this page.
 const showButtons = await (async () => {
   const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
@@ -118,8 +154,23 @@ await clickPanel('Show');
 await page.waitForTimeout(100);
 assert.equal((await zappedTexts()).length, initial.length - 1, 'Show restored one block');
 
-// Interests: raise "celebrity gossip" from -0.5 toward 0 with the keyboard, then save.
+// The confidence slider re-decides the page while it moves, with no reload.
 await clickPanel('Interests');
+const confNode = await findPanelNode((n) => n.nodeName === 'INPUT' && (attrsOf(n)['aria-label'] ?? '').startsWith('Zap when'));
+await cdp.send('DOM.focus', { nodeId: confNode.nodeId });
+const beforeSlide = (await zappedTexts()).length;
+await page.keyboard.press('End'); // 99%: only blocks the scorer is all but certain about
+await settle();
+const atTop = (await zappedTexts()).length;
+await page.keyboard.press('Home'); // 50%
+await settle();
+const atBottom = (await zappedTexts()).length;
+console.log(`live threshold: ${beforeSlide} hidden at 80%, ${atTop} at 99%, ${atBottom} at 50%`);
+assert.ok(atBottom > atTop, 'moving the confidence slider changes what is hidden right away');
+await page.keyboard.press('PageUp'); // leave it near where it was
+await page.evaluate(() => 0);
+
+// Interests: raise "celebrity gossip" from -0.5 toward 0 with the keyboard, then save.
 const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
 let rangeId = null;
 (function walk(x) {
@@ -142,6 +193,32 @@ assert.deepEqual(draftWeights, {});
 const local = await worker.evaluate(() => chrome.storage.local.get(null));
 assert.ok(!JSON.stringify(local.lens).includes('127.0.0.1'), 'lens holds no trace of the page');
 
+// --- Site rule: table-row stories are one block each -------------------------
+await context.route('https://news.ycombinator.com/**', (route) =>
+  route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: linkTable }));
+await page.goto('https://news.ycombinator.com/');
+await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
+await settle();
+const rows = await page.evaluate(() => {
+  const ids = [...document.querySelectorAll('tr.athing')].map((tr) => tr.getAttribute('data-lpz-id'));
+  const group = (id) => document.querySelectorAll(`[data-lpz-id="${id}"]`).length;
+  return {
+    ids,
+    sizes: ids.map(group),
+    chrome: document.querySelectorAll('.pagetop[data-lpz-id], .pagetop [data-lpz-id], [data-lpz-id] .pagetop, .yclinks[data-lpz-id], [data-lpz-id] .yclinks, [data-lpz-id] .morelink').length,
+    football: [...document.querySelectorAll('[data-lpz-id]')].filter((e) => e.getAttribute('data-lpz-id') === document.getElementById('s4').getAttribute('data-lpz-id')).map((e) => e.hasAttribute('data-lpz-zapped'))
+  };
+});
+console.log(`link table: ${rows.ids.length} stories, rows per block ${rows.sizes.join(',')}`);
+assert.equal(rows.ids.length, 5, 'every story row is its own block');
+assert.equal(new Set(rows.ids).size, 5);
+assert.ok(rows.ids.every(Boolean));
+assert.deepEqual(rows.sizes, [3, 3, 3, 3, 2], 'a story block includes its points row and spacer');
+assert.equal(rows.chrome, 0, 'the top links, the More link, and the footer links are never blocks');
+assert.ok(rows.football.length > 1 && rows.football.every(Boolean), 'zapping a story hides all of its rows');
+if (shots) await page.screenshot({ path: join(shots, 'link-table.jpg'), quality: 80 });
+await page.goto(pageUrl);
+
 // --- Model scorer path, against a stand-in model server on 127.0.0.1 --------
 // The stand-in answers the decision-model (/v1/systemone), OpenAI-compatible, and Ollama APIs with canned
 // judgments, so this exercises the real plumbing (service worker fetch,
@@ -156,11 +233,17 @@ const judge = (text) => {
   return m;
 };
 let modelCalls = 0;
+let inFlight = 0;
+let maxInFlight = 0;
 const modelServer = createServer((req, res) => {
   let raw = '';
+  inFlight++;
+  maxInFlight = Math.max(maxInFlight, inFlight);
+  res.on('finish', () => inFlight--);
   req.on('data', (c) => (raw += c));
-  req.on('end', () => {
+  req.on('end', async () => {
     modelCalls++;
+    await new Promise((r) => setTimeout(r, 40)); // a model takes a moment
     const body = JSON.parse(raw);
     if (req.url === '/v1/systemone') {
       // Decision-model API: one block per request, a noul question per topic.
@@ -193,18 +276,28 @@ for (const api of ['systemone', 'openai', 'ollama']) {
   await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
     threshold: 0.8,
     scorer: 'model',
-    model: { api, endpoint: modelEndpoint, model: 'stand-in' }
+    model: { api, endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 }
   });
   modelCalls = 0;
+  maxInFlight = 0;
   await page.reload();
+  if (shots && api === 'systemone') {
+    await page.waitForSelector('[data-lpz-scoring="active"]', { state: 'attached' });
+    await page.screenshot({ path: join(shots, 'scoring.jpg'), quality: 80 });
+  }
   await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
-  await page.waitForTimeout(300);
+  await settle();
   assert.ok(modelCalls > 0, `${api}: the model endpoint was called`);
+  assert.ok(maxInFlight <= 2, `${api}: at most 2 requests at once (saw ${maxInFlight})`);
+  if (api === 'systemone') {
+    const n = await page.$$eval('[data-lpz-id]', (els) => new Set(els.map((e) => e.getAttribute('data-lpz-id'))).size);
+    assert.equal(modelCalls, n, 'systemone: one request per block');
+  }
   assert.equal(await isZapped('incident report'), false, `${api}: model keeps the on-topic paragraph the lexical scorer missed`);
   assert.equal(await isZapped('mild weekend'), true, `${api}: off-lens block hidden`);
   assert.equal(await isZapped('spring musical'), false, `${api}: a block the model said nothing about is never zapped`);
   assert.equal(await isZapped('Correction:'), false);
-  console.log(`model scorer (${api}): hidden ${(await zappedTexts()).length}, ${modelCalls} request(s)`);
+  console.log(`model scorer (${api}): hidden ${(await zappedTexts()).length}, ${modelCalls} request(s), at most ${maxInFlight} at once`);
 }
 if (shots) await page.screenshot({ path: join(shots, 'model-scorer.jpg'), quality: 80 });
 

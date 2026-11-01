@@ -6,40 +6,46 @@
 // default (spec/lenspub-protocol.md Section 7.3). This tool does exactly that,
 // on purpose; see docs/explorations/semantic-zapper.md Section 5 for why it is
 // a separate tool and which LensPub rules it keeps anyway. On every page it:
-//   1. splits the page into blocks (paragraphs, list items, cards, sidebars);
+//   1. splits the page into blocks (paragraphs, list items, cards, sidebars,
+//      and, on sites with a rule in core/segment.js, the site's own items);
 //   2. scores each block against the reader's interest topics, with the
-//      lexical scorer or a model on this machine;
+//      lexical scorer or a model on this machine, visible blocks first and a
+//      few at a time, so blocks are judged and zapped as the answers arrive;
 //   3. hides blocks it is confident are off-lens, by attribute + stylesheet,
 //      never by removing or rewriting nodes;
 //   4. lists every hidden block in a ledger with its reasoning, and checks
 //      after every pass that what is hidden equals what the ledger lists;
 //   5. never hides page controls, corrections, or primary sources, or anything
 //      the scorer returned nothing for.
+// Hovering any scored block shows its score and the reason for its decision.
 //
-// Page text is only ever written into the panel with textContent.
+// Page text is only ever written into the sidebar with textContent.
 
 (async () => {
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }] = await Promise.all([
-    import(url('core/decide.js')),
-    import(url('core/lexical-scorer.js'))
-  ]);
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder }] =
+    await Promise.all([
+      import(url('core/decide.js')),
+      import(url('core/lexical-scorer.js')),
+      import(url('core/segment.js'))
+    ]);
   const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
   const host = location.hostname;
+  const rule = siteRule(host);
 
   let state = await send('get-state', { host });
   if (!state || state.error) return;
 
   // --- Page model ----------------------------------------------------------
 
-  const blocks = new Map(); // id → { el, text }
+  const blocks = new Map(); // id → { els: Element[], text }
   const scores = new Map(); // id → scorer output
   const restored = new Set(); // ids restored on this page (never persisted)
   let decisions = [];
+  let decisionById = new Map();
   let scorerId = state.settings.scorer === 'lexical' ? LEXICAL_SCORER_ID : 'model (not yet run)';
-  let pending = 0;
   let modelError = null;
   let ledgerFailure = null;
   let nextId = 1;
@@ -52,23 +58,32 @@
     }));
   const threshold = () => state.site.threshold ?? state.settings.threshold;
   const paused = () => state.site.paused === true;
+  const pct = (x) => `${Math.round(x * 100)}%`;
 
   // --- Segmentation ----------------------------------------------------------
 
   const MIN_CHARS = 40;
   const MAX_CONTAINER_CHARS = 1200;
-  const LEAFY = new Set(['P', 'LI', 'BLOCKQUOTE', 'PRE', 'DD', 'TD', 'FIGCAPTION']);
-  const CONTAINER = new Set(['ARTICLE', 'SECTION', 'ASIDE', 'DIV', 'TR', 'FIGURE', 'UL', 'OL']);
+  // Text elements: always one block, however long.
+  const LEAFY = new Set(['P', 'BLOCKQUOTE', 'PRE', 'DD', 'FIGCAPTION']);
+  // Elements that are one block when short and holding one item, and are
+  // split into their children otherwise. A table cell holding a whole list of
+  // stories is a container, not a paragraph.
+  const CONTAINER = new Set(['ARTICLE', 'SECTION', 'ASIDE', 'DIV', 'TR', 'TD', 'LI', 'FIGURE', 'UL', 'OL']);
   // Never zapped and never descended into: page controls and chrome.
   const STRUCTURAL = [
     'nav', 'header', 'footer', 'form', 'dialog', 'menu', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
     'script', 'style', 'noscript', 'template', 'svg', 'canvas', 'video', 'audio', 'iframe',
     'input', 'textarea', 'select', 'button', '[role="dialog"]', '[role="alertdialog"]',
     '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]', '[role="search"]',
-    '[role="menu"]', '[aria-modal="true"]', '[contenteditable="true"]'
+    '[role="menu"]', '[aria-modal="true"]', '[contenteditable="true"]',
+    ...(rule?.structural ? [rule.structural] : [])
   ].join(',');
   // A container holding one of these is split into its parts instead.
-  const SPLIT_IF_CONTAINS = 'h1, form, input, textarea, select, dialog, [role="dialog"], nav, [data-lpz-id]';
+  const SPLIT_IF_CONTAINS = [
+    'h1, form, input, textarea, select, dialog, [role="dialog"], nav, [data-lpz-id]',
+    ...(rule?.structural ? [rule.structural] : [])
+  ].join(',');
 
   const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
@@ -78,19 +93,39 @@
     return false;
   }
 
+  function register(els, text) {
+    const id = `b${nextId++}`;
+    for (const el of els) el.setAttribute('data-lpz-id', id);
+    blocks.set(id, { els, text });
+    return id;
+  }
+
   /** Find new blocks; returns their ids. Blocks already registered are kept. */
   function scan() {
     for (const [id, b] of blocks) {
-      if (!b.el.isConnected) {
+      if (!b.els.some((el) => el.isConnected)) {
         blocks.delete(id);
         scores.delete(id);
         restored.delete(id);
       }
     }
     const added = [];
+    if (rule) {
+      for (const item of document.querySelectorAll(rule.item)) {
+        if (item.hasAttribute('data-lpz-id') || item.closest(STRUCTURAL)) continue;
+        // Cell by cell, so "1." and the title do not run together.
+        const text = norm([...item.children].map((c) => c.textContent).join(' ') || item.textContent);
+        if (!text) continue;
+        const els = groupWithFollowing(
+          item,
+          (s) => s.matches(rule.stop) || s.hasAttribute('data-lpz-id') || s.matches(STRUCTURAL) || !!s.querySelector(SPLIT_IF_CONTAINS)
+        );
+        added.push(register(els, text));
+      }
+    }
     (function walk(el) {
       for (const child of el.children) {
-        if (child === panelHost || child.hasAttribute('data-lpz-id')) continue;
+        if (child === sidebarHost || child.hasAttribute('data-lpz-id')) continue;
         if (child.matches(STRUCTURAL)) continue;
         const text = norm(child.textContent);
         if (text.length < MIN_CHARS) continue;
@@ -104,76 +139,192 @@
           (LEAFY.has(tag) ||
             (containerish && text.length <= MAX_CONTAINER_CHARS && !hasSeveralItems(child))) &&
           !child.querySelector(SPLIT_IF_CONTAINS);
-        if (selectable) {
-          const id = `b${nextId++}`;
-          child.setAttribute('data-lpz-id', id);
-          blocks.set(id, { el: child, text });
-          added.push(id);
-        } else {
-          walk(child);
-        }
+        if (selectable) added.push(register([child], text));
+        else walk(child);
       }
     })(document.body);
     return added;
   }
 
-  // --- Scoring -----------------------------------------------------------------
+  // --- Scoring: visible blocks first, a few at a time ---------------------------
 
-  async function score(ids) {
-    if (ids.length === 0) return;
-    const batch = ids.filter((id) => blocks.has(id)).map((id) => ({ id, text: blocks.get(id).text }));
-    if (state.settings.scorer === 'lexical') {
-      scorerId = LEXICAL_SCORER_ID;
-      for (const s of scoreLexical(batch, topics())) scores.set(s.id, s);
-      return;
+  const queue = []; // ids waiting for the model
+  const progress = { done: 0, total: 0 };
+  let inFlight = 0;
+  let generation = 0; // bumped to drop answers from a superseded run
+
+  const setAttr = (b, name, value) => {
+    for (const el of b.els) {
+      if (value == null) el.removeAttribute(name);
+      else el.setAttribute(name, value);
     }
-    pending += batch.length;
-    renderHeader();
-    try {
-      const res = await send('score-model', { blocks: batch, topics: topics() });
-      if (res?.error) throw new Error(res.error);
-      scorerId = res.scorer;
-      modelError = null;
-      for (const s of res.scores) if (s) scores.set(s.id, s);
-    } catch (err) {
-      // Blocks without scores are never zapped: a failed model hides nothing.
-      modelError = String(err?.message ?? err);
-    } finally {
-      pending -= batch.length;
-    }
+  };
+  const markScoring = (id, v) => {
+    const b = blocks.get(id);
+    if (b) setAttr(b, 'data-lpz-scoring', v);
+  };
+
+  function sortQueue() {
+    const items = queue.filter((id) => blocks.has(id)).map((id) => {
+      const r = blocks.get(id).els[0].getBoundingClientRect();
+      return { id, top: r.top, bottom: r.bottom };
+    });
+    queue.splice(0, queue.length, ...scoringOrder(items, innerHeight));
   }
 
-  // --- Applying decisions and the ledger check -------------------------------
+  function enqueue(ids) {
+    ids = ids.filter((id) => blocks.has(id));
+    if (ids.length === 0) return;
+    if (state.settings.scorer === 'lexical') {
+      scorerId = LEXICAL_SCORER_ID;
+      for (const s of scoreLexical(ids.map((id) => ({ id, text: blocks.get(id).text })), topics())) scores.set(s.id, s);
+      return;
+    }
+    for (const id of ids) {
+      markScoring(id, 'queued');
+      queue.push(id);
+    }
+    progress.total += ids.length;
+    sortQueue();
+    pump();
+  }
+
+  function stopScoring() {
+    for (const id of queue) markScoring(id, null);
+    queue.length = 0;
+    for (const [id, b] of blocks) if (b.els[0].hasAttribute('data-lpz-scoring')) markScoring(id, null);
+    progress.done = progress.total = 0;
+  }
+
+  function pump() {
+    const gen = generation;
+    const m = state.settings.model;
+    const limit = Math.min(8, Math.max(1, Number(m.concurrency) || 4));
+    // A decision model answers one block per request; a chat model takes a few.
+    const per = m.api === 'systemone' ? 1 : 6;
+    while (!modelError && inFlight < limit && queue.length) {
+      const ids = queue.splice(0, per).filter((id) => blocks.has(id));
+      if (ids.length === 0) continue;
+      inFlight++;
+      ids.forEach((id) => markScoring(id, 'active'));
+      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
+        .then((res) => {
+          if (gen !== generation) return;
+          if (!res || res.error) throw new Error(res?.error ?? 'no answer from the extension');
+          scorerId = res.scorer;
+          for (const s of res.scores) if (s) scores.set(s.id, s);
+        })
+        .catch((err) => {
+          // Blocks without scores are never zapped: a failed model hides nothing.
+          if (gen === generation) {
+            modelError = String(err?.message ?? err);
+            stopScoring();
+          }
+        })
+        .finally(() => {
+          if (gen !== generation) return;
+          inFlight--;
+          ids.forEach((id) => markScoring(id, null));
+          progress.done += ids.length;
+          if (!queue.length && !inFlight) progress.done = progress.total = 0;
+          apply();
+          pump();
+        });
+    }
+    renderHeader();
+  }
+
+  function rescoreAll() {
+    generation++;
+    stopScoring();
+    inFlight = 0;
+    modelError = null;
+    scores.clear();
+    enqueue([...blocks.keys()]);
+    apply();
+    renderBody();
+  }
+
+  // --- Applying decisions, with the zap animation, and the ledger check --------
+
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const ZAP_MS = 650;
+  const UNZAP_MS = 450;
+  const animating = () => state.settings.animate !== false && !reduceMotion.matches && !ui.before;
+  const inView = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.top < innerHeight && r.width > 0;
+  };
+  const isHidden = (b) => b.els[0].hasAttribute('data-lpz-zapped') || b.els[0].hasAttribute('data-lpz-zapping');
+
+  function setZap(b, on) {
+    if (on === isHidden(b)) return;
+    if (on) {
+      setAttr(b, 'data-lpz-unzap', null);
+      if (!animating() || !b.els.some(inView)) {
+        setAttr(b, 'data-lpz-zapped', '');
+        return;
+      }
+      // The block crackles, then vanishes. It counts as hidden from the start,
+      // so the ledger check sees it either way.
+      setAttr(b, 'data-lpz-zapping', '');
+      setTimeout(() => {
+        if (!b.els[0].hasAttribute('data-lpz-zapping')) return; // un-zapped meanwhile
+        setAttr(b, 'data-lpz-zapping', null);
+        setAttr(b, 'data-lpz-zapped', '');
+      }, ZAP_MS);
+    } else {
+      setAttr(b, 'data-lpz-zapping', null);
+      setAttr(b, 'data-lpz-zapped', null);
+      if (animating()) {
+        setAttr(b, 'data-lpz-unzap', '');
+        setTimeout(() => setAttr(b, 'data-lpz-unzap', null), UNZAP_MS);
+      }
+    }
+  }
 
   function apply() {
     const scored = [...blocks.keys()].filter((id) => scores.has(id)).map((id) => scores.get(id));
     decisions = paused() || ledgerFailure
       ? []
       : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored });
+    decisionById = new Map(decisions.map((d) => [d.id, d]));
     const zap = new Set(decisions.filter((d) => d.zap).map((d) => d.id));
-    for (const [id, b] of blocks) b.el.toggleAttribute('data-lpz-zapped', zap.has(id));
+    for (const [id, b] of blocks) setZap(b, zap.has(id));
 
-    const hidden = [...document.querySelectorAll('[data-lpz-zapped]')].map((el) => el.getAttribute('data-lpz-id'));
+    const hidden = new Set(
+      [...document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]')].map((el) => el.getAttribute('data-lpz-id'))
+    );
     const check = checkLedger(hidden, zap);
     if (!check.ok) {
       ledgerFailure = check;
-      document.querySelectorAll('[data-lpz-zapped]').forEach((el) => el.removeAttribute('data-lpz-zapped'));
+      document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]').forEach((el) => {
+        el.removeAttribute('data-lpz-zapped');
+        el.removeAttribute('data-lpz-zapping');
+      });
       decisions = [];
+      decisionById = new Map();
     }
     renderHeader();
     renderLedger();
+    if (tipFor) renderTip(tipFor);
   }
 
-  // --- Panel -------------------------------------------------------------------
+  // --- Sidebar -----------------------------------------------------------------
 
-  const panelHost = document.createElement('lenspub-zapper');
-  const shadow = panelHost.attachShadow({ mode: 'closed' });
+  const SIDEBAR_CLASS = { open: 'lpz-docked', min: 'lpz-docked-min' };
+  const sidebarHost = document.createElement('lenspub-zapper');
+  // Inline and !important, so page stylesheets cannot move or hide the host.
+  for (const [k, v] of Object.entries({
+    all: 'initial', position: 'fixed', top: '0', right: '0', bottom: '0', 'z-index': '2147483647', display: 'block'
+  })) sidebarHost.style.setProperty(k, v, 'important');
+  const shadow = sidebarHost.attachShadow({ mode: 'closed' });
   try {
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(await (await fetch(url('content/panel.css'))).text());
     shadow.adoptedStyleSheets = [sheet];
   } catch {
-    /* unstyled panel still works */
+    /* an unstyled sidebar still works */
   }
 
   const h = (tag, props = {}, ...kids) => {
@@ -188,49 +339,77 @@
     return el;
   };
 
-  const ui = { tab: 'ledger', collapsed: false, before: false, flash: null };
-  const panel = h('div', { class: 'panel', role: 'complementary', 'aria-label': 'LensPub Zapper' });
-  const header = h('header');
+  const ui = { tab: 'ledger', collapsed: state.settings.sidebarCollapsed === true, before: false, hold: false, ledgerDirty: false };
+
+  // Header parts are built once and updated in place, so a click is never lost
+  // to a re-render while blocks are being scored.
+  const countEl = h('span', { class: 'count', 'aria-live': 'polite' });
+  const progressBar = h('div', { class: 'progress', hidden: true }, h('div', { class: 'fill' }));
+  const beforeBtn = h('button', {
+    title: 'Show the page as published, with zapped blocks outlined',
+    on: {
+      click: () => {
+        ui.before = !ui.before;
+        document.documentElement.classList.toggle('lpz-before', ui.before);
+        renderHeader();
+      }
+    }
+  });
+  const collapseBtn = h('button', {
+    class: 'collapse',
+    on: {
+      click: () => {
+        ui.collapsed = !ui.collapsed;
+        dock();
+        renderHeader();
+        send('set-settings', { patch: { sidebarCollapsed: ui.collapsed } });
+      }
+    }
+  });
+  const header = h('header', {},
+    h('div', { class: 'top' }, h('span', { class: 'title', text: '⚡ Zapper' }), collapseBtn),
+    h('div', { class: 'status' }, countEl, beforeBtn),
+    progressBar);
   const tabs = h('div', { class: 'tabs', role: 'tablist' });
   const body = h('div', { class: 'body' });
-  panel.append(header, tabs, body);
-  shadow.append(panel);
-  document.documentElement.append(panelHost);
+  const sidebar = h('aside', { class: 'sidebar', 'aria-label': 'LensPub Zapper' }, header, tabs, body);
+  const tip = h('div', { class: 'tip', role: 'tooltip', hidden: true });
+  shadow.append(sidebar, tip);
+  document.documentElement.append(sidebarHost);
+
+  // While the pointer is over the sidebar, the ledger list is not rebuilt
+  // under it; it catches up when the pointer leaves.
+  sidebar.addEventListener('pointerenter', () => (ui.hold = true));
+  sidebar.addEventListener('pointerleave', () => {
+    ui.hold = false;
+    if (ui.ledgerDirty) renderLedger(true);
+  });
+
+  function dock() {
+    const html = document.documentElement;
+    html.classList.toggle(SIDEBAR_CLASS.open, !ui.collapsed);
+    html.classList.toggle(SIDEBAR_CLASS.min, ui.collapsed);
+    sidebar.classList.toggle('collapsed', ui.collapsed);
+  }
+  dock();
 
   function renderHeader() {
     const zapped = decisions.filter((d) => d.zap).length;
-    const count = h('span', { class: 'count', 'aria-live': 'polite' });
-    if (paused()) count.textContent = 'Paused on this site';
-    else if (pending) count.textContent = `Scoring ${pending} blocks…`;
-    else count.append(h('strong', { text: String(zapped) }), ` hidden of ${blocks.size}`);
-    header.replaceChildren(
-      h('span', { class: 'title', text: 'Zapper' }),
-      count,
-      h('button', {
-        'aria-pressed': String(ui.before),
-        title: 'Show the page as published, with zapped blocks outlined',
-        text: ui.before ? 'After' : 'Before',
-        on: {
-          click: () => {
-            ui.before = !ui.before;
-            document.documentElement.classList.toggle('lpz-before', ui.before);
-            renderHeader();
-          }
-        }
-      }),
-      h('button', {
-        'aria-expanded': String(!ui.collapsed),
-        'aria-label': ui.collapsed ? 'Expand panel' : 'Collapse panel',
-        text: ui.collapsed ? '▴' : '▾',
-        on: {
-          click: () => {
-            ui.collapsed = !ui.collapsed;
-            panel.classList.toggle('collapsed', ui.collapsed);
-            renderHeader();
-          }
-        }
-      })
-    );
+    countEl.replaceChildren();
+    if (paused()) countEl.textContent = ui.collapsed ? '‖' : 'Paused on this site';
+    else if (ui.collapsed) countEl.append(h('strong', { text: String(zapped) }));
+    else {
+      countEl.append(h('strong', { text: String(zapped) }), ` hidden of ${blocks.size}`);
+      if (progress.total) countEl.append(h('span', { class: 'scoring', text: ` · scoring ${progress.done}/${progress.total}` }));
+    }
+    countEl.title = `${zapped} hidden of ${blocks.size} blocks`;
+    progressBar.hidden = !progress.total;
+    progressBar.firstChild.style.width = progress.total ? `${(100 * progress.done) / progress.total}%` : '0';
+    beforeBtn.textContent = ui.before ? 'After' : 'Before';
+    beforeBtn.setAttribute('aria-pressed', String(ui.before));
+    collapseBtn.textContent = ui.collapsed ? '⟨' : '⟩';
+    collapseBtn.setAttribute('aria-label', ui.collapsed ? 'Expand the zapper sidebar' : 'Shrink the zapper sidebar');
+    collapseBtn.setAttribute('aria-expanded', String(!ui.collapsed));
   }
 
   function renderTabs() {
@@ -248,7 +427,7 @@
   const setBody = (...parts) => body.replaceChildren(...parts.filter((p) => p != null));
 
   function renderBody() {
-    if (ui.tab === 'ledger') renderLedger();
+    if (ui.tab === 'ledger') renderLedger(true);
     else if (ui.tab === 'interests') renderInterests();
     else renderSite();
   }
@@ -259,54 +438,64 @@
   };
 
   function showBlock(id) {
-    const el = blocks.get(id)?.el;
-    if (!el) return;
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    el.setAttribute('data-lpz-flash', '');
-    setTimeout(() => el.removeAttribute('data-lpz-flash'), 1600);
+    const b = blocks.get(id);
+    if (!b) return;
+    b.els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setAttr(b, 'data-lpz-flash', '');
+    setTimeout(() => setAttr(b, 'data-lpz-flash', null), 1600);
   }
 
-  function renderLedger() {
+  // Each control re-renders right away; scoring updates wait while the
+  // pointer is over the sidebar (see ui.hold).
+  const act = (fn) => () => { fn(); apply(); renderLedger(true); };
+
+  function renderLedger(force = false) {
     if (ui.tab !== 'ledger') return;
+    if (ui.hold && !force) {
+      ui.ledgerDirty = true;
+      return;
+    }
+    ui.ledgerDirty = false;
     const parts = [];
     if (ledgerFailure) {
       parts.push(h('div', { class: 'error', role: 'alert' },
         'Stopped: the hidden blocks did not match the ledger, so everything was restored. Reload the page to try again.'));
     }
     if (modelError) {
-      parts.push(h('div', { class: 'warn' }, `Model scorer failed, so nothing new was hidden: ${modelError}`));
+      parts.push(h('div', { class: 'warn' },
+        `Model scorer failed, so nothing more was hidden: ${modelError} `,
+        h('button', {
+          text: 'Retry',
+          on: { click: () => { modelError = null; enqueue([...blocks.keys()].filter((id) => !scores.has(id))); renderLedger(true); } }
+        })));
     }
     const zapped = decisions.filter((d) => d.zap);
     const back = decisions.filter((d) => d.exempt === 'restored');
     parts.push(h('p', { class: 'note' },
       zapped.length
-        ? 'Every hidden block is listed here. Show puts it back on this page.'
-        : paused() ? 'The zapper is paused on this site.' : 'Nothing hidden on this page.'));
+        ? 'Every hidden block is listed here. Show puts it back on this page. Hover any block on the page for its score.'
+        : paused() ? 'The zapper is paused on this site.' : progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
     if (zapped.length) {
       parts.push(h('div', { class: 'actions' },
-        h('button', {
-          text: 'Restore all',
-          on: { click: () => { zapped.forEach((d) => restored.add(d.id)); apply(); } }
-        })));
+        h('button', { text: 'Restore all', on: { click: act(() => zapped.forEach((d) => restored.add(d.id))) } })));
     }
-    parts.push(h('ul', {}, zapped.map((d) =>
+    const entry = (d, button) =>
       h('li', { class: 'entry' },
         h('div', { class: 'row' },
+          h('span', { class: `score ${d.zap ? 'off' : ''}`, text: pct(d.offLens), title: 'How sure the scorer is that this block is off your lens' }),
           h('div', { class: 'snippet', text: snippet(d.id) }),
-          h('button', {
-            text: 'Show',
-            'aria-label': `Show hidden block: ${snippet(d.id).slice(0, 60)}`,
-            on: { click: () => { restored.add(d.id); apply(); showBlock(d.id); } }
-          })),
-        h('div', { class: 'why', text: d.trace })))));
+          button),
+        h('div', { class: 'why', text: d.trace }));
+    parts.push(h('ul', {}, zapped.map((d) =>
+      entry(d, h('button', {
+        text: 'Show',
+        'aria-label': `Show hidden block: ${snippet(d.id).slice(0, 60)}`,
+        on: { click: () => { act(() => restored.add(d.id))(); showBlock(d.id); } }
+      })))));
     if (back.length) {
       parts.push(h('h3', { text: 'Restored on this page' }));
       parts.push(h('ul', {}, back.map((d) =>
-        h('li', { class: 'entry' },
-          h('div', { class: 'row' },
-            h('div', { class: 'snippet', text: snippet(d.id) }),
-            h('button', { text: 'Zap again', on: { click: () => { restored.delete(d.id); apply(); } } })),
-          h('div', { class: 'why', text: d.trace })))));
+        entry(d, h('button', { text: 'Zap again', on: { click: act(() => restored.delete(d.id)) } })))));
     }
     setBody(...parts);
   }
@@ -333,7 +522,8 @@
       else state.site = (await send('set-site', { host, patch: { threshold: null } })).site;
       apply();
     });
-    const pct = (x) => `${Math.round(x * 100)}%`;
+    // Both kinds of slider re-decide every block on each step, so the page
+    // changes while the slider moves. Scores are cached; nothing is re-scored.
     const conf = slider({
       label: 'Zap when at least this sure a block is off your lens',
       min: 0.5, max: 0.99, step: 0.01, value: threshold(), format: pct,
@@ -401,6 +591,16 @@
     );
   }
 
+  function toggleSetting(key, label) {
+    const box = h('input', { type: 'checkbox' });
+    box.checked = state.settings[key] !== false;
+    box.addEventListener('change', async () => {
+      state.settings = (await send('set-settings', { patch: { [key]: box.checked } })).settings;
+      if (key === 'hoverInfo' && !box.checked) hideTip();
+    });
+    return h('label', { class: 'check' }, box, ` ${label}`);
+  }
+
   function renderSite() {
     const pauseBtn = h('button', {
       'aria-pressed': String(paused()),
@@ -416,12 +616,16 @@
     setBody(
       h('div', { class: 'actions' }, pauseBtn,
         h('button', { text: 'Settings…', on: { click: () => send('open-options') } })),
+      h('h3', { text: 'Display' }),
+      toggleSetting('hoverInfo', 'Show the score when I hover over a block'),
+      toggleSetting('animate', 'Animate scoring and zapping'),
       h('h3', { text: 'How this page was judged' }),
       h('dl', { class: 'kv' },
         h('dt', { text: 'Scorer' }), h('dd', { text: scorerId }),
         h('dt', { text: 'Runs on' }), h('dd', { text: state.settings.scorer === 'lexical' ? 'this browser, no model' : `this machine (${state.settings.model.endpoint})` }),
-        h('dt', { text: 'Threshold' }), h('dd', { text: `${Math.round(threshold() * 100)}%${state.site.threshold !== undefined ? ' (this site)' : ''}` }),
-        h('dt', { text: 'Lens' }), h('dd', { text: `${state.lens.metadata.name} v${state.lens.metadata.lensVersion}` })),
+        h('dt', { text: 'Threshold' }), h('dd', { text: `${pct(threshold())}${state.site.threshold !== undefined ? ' (this site)' : ''}` }),
+        h('dt', { text: 'Lens' }), h('dd', { text: `${state.lens.metadata.name} v${state.lens.metadata.lensVersion}` }),
+        rule ? h('dt', { text: 'Site rule' }) : null, rule ? h('dd', { text: `${rule.name}: one block per item` }) : null),
       h('h3', { text: 'Never zapped' }),
       h('p', { class: 'note', text: 'Headings, navigation, forms, dialogs, corrections and clarifications, cited primary sources, and anything the scorer returned nothing for.' }),
       state.unsupported.length ? h('h3', { text: 'In your lens but not used here' }) : null,
@@ -430,38 +634,130 @@
     );
   }
 
+  // --- Hover popover: score and reason for any block -----------------------------
+
+  let tipFor = null;
+  let hoverTimer = null;
+  let hoverId = null;
+
+  function hideTip() {
+    clearTimeout(hoverTimer);
+    if (hoverId && blocks.has(hoverId)) setAttr(blocks.get(hoverId), 'data-lpz-hover', null);
+    hoverId = tipFor = null;
+    tip.hidden = true;
+  }
+
+  function renderTip(id) {
+    const b = blocks.get(id);
+    if (!b) return hideTip();
+    const d = decisionById.get(id);
+    const s = scores.get(id);
+    const parts = [];
+    let verdict;
+    let cls;
+    if (paused()) [verdict, cls] = ['Paused on this site', 'muted'];
+    else if (b.els[0].hasAttribute('data-lpz-scoring')) [verdict, cls] = ['Scoring…', 'muted'];
+    else if (!d) [verdict, cls] = [modelError ? 'Not scored (the model failed)' : 'Not scored yet', 'muted'];
+    else if (d.zap) [verdict, cls] = ['Zapped', 'off'];
+    else if (d.exempt === 'restored') [verdict, cls] = ['Restored by you', 'on'];
+    else if (d.exempt) [verdict, cls] = ['Never zapped', 'on'];
+    else [verdict, cls] = ['Kept', 'on'];
+    parts.push(h('div', { class: 'tip-head' }, h('span', { class: `pill ${cls}`, text: verdict }),
+      d ? h('span', { class: 'big', text: `${pct(d.offLens)} off-lens` }) : null));
+    if (d) {
+      parts.push(h('div', { class: 'meter', title: `Zap at ${pct(threshold())}` },
+        h('div', { class: `fill ${d.zap ? 'off' : ''}`, style: `width:${Math.round(d.offLens * 100)}%` }),
+        h('div', { class: 'mark', style: `left:${Math.round(threshold() * 100)}%` })));
+      parts.push(h('div', { class: 'tip-note', text: `Zaps at ${pct(threshold())} or more` }));
+    }
+    if (s && !s.unscored && s.matches) {
+      const weights = new Map(priorities().map((p) => [p.topic, p.weight]));
+      const rows = Object.entries(s.matches).sort((a, b2) => b2[1] - a[1]);
+      parts.push(h('table', { class: 'matches' },
+        h('tbody', {}, rows.map(([t, m]) => {
+          const w = weights.get(t) ?? 0;
+          return h('tr', {},
+            h('td', { class: 'topic', text: t }),
+            h('td', { class: 'num', text: pct(m) }),
+            h('td', { class: `num w ${w < 0 ? 'neg' : ''}`, text: `${w > 0 ? '+' : ''}${w.toFixed(2)}` }));
+        }))));
+    }
+    if (d) parts.push(h('div', { class: 'why', text: d.trace }));
+    tip.replaceChildren(...parts);
+    tip.hidden = false;
+    tipFor = id;
+    placeTip(b);
+  }
+
+  function placeTip(b) {
+    const rects = b.els.map((el) => el.getBoundingClientRect()).filter((r) => r.width || r.height);
+    if (!rects.length) return;
+    const top = Math.min(...rects.map((r) => r.top));
+    const bottom = Math.max(...rects.map((r) => r.bottom));
+    const left = Math.min(...rects.map((r) => r.left));
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const maxX = innerWidth - (ui.collapsed ? 44 : 340) - tw - 8;
+    const x = Math.max(8, Math.min(left, maxX));
+    let y = bottom + 6;
+    if (y + th > innerHeight - 8) y = top - th - 6;
+    if (y < 8) y = Math.min(innerHeight - th - 8, Math.max(8, top + 8));
+    tip.style.left = `${x}px`;
+    tip.style.top = `${y}px`;
+  }
+
+  document.addEventListener('pointerover', (e) => {
+    if (state.settings.hoverInfo === false) return;
+    const el = e.target instanceof Element ? e.target.closest('[data-lpz-id]') : null;
+    const id = el?.getAttribute('data-lpz-id') ?? null;
+    if (id === hoverId) return;
+    hideTip();
+    if (!id || !blocks.has(id)) return;
+    hoverId = id;
+    setAttr(blocks.get(id), 'data-lpz-hover', '');
+    hoverTimer = setTimeout(() => renderTip(id), 250);
+  }, true);
+  document.documentElement.addEventListener('pointerleave', hideTip);
+  addEventListener('scroll', () => { if (tipFor) hideTip(); }, { passive: true, capture: true });
+
+  // Score what the reader scrolls to next.
+  let sortTimer = null;
+  addEventListener('scroll', () => {
+    if (!queue.length || sortTimer) return;
+    sortTimer = setTimeout(() => { sortTimer = null; sortQueue(); }, 300);
+  }, { passive: true });
+
   renderHeader();
   renderTabs();
   renderBody();
 
   // --- Run, and keep up with the page -------------------------------------------
 
-  async function rescoreAll() {
-    scores.clear();
-    await score([...blocks.keys()]);
-    apply();
-    renderBody();
-  }
-
-  await score(scan());
+  enqueue(scan());
   apply();
 
   let timer = null;
   new MutationObserver((mutations) => {
-    if (mutations.every((m) => panelHost.contains(m.target))) return;
+    if (mutations.every((m) => sidebarHost.contains(m.target))) return;
     clearTimeout(timer);
-    timer = setTimeout(async () => {
-      const added = scan();
-      if (added.length) await score(added);
+    timer = setTimeout(() => {
+      enqueue(scan());
       apply();
     }, 800);
   }).observe(document.body, { childList: true, subtree: true });
 
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== 'local' || !(changes.lens || changes.settings)) return;
-    const before = JSON.stringify([topics(), state.settings.scorer, state.settings.model]);
+    const key = () => {
+      const m = state.settings.model;
+      return JSON.stringify([topics(), state.settings.scorer, m.api, m.endpoint, m.model]);
+    };
+    const before = key();
     state = await send('get-state', { host });
-    if (JSON.stringify([topics(), state.settings.scorer, state.settings.model]) !== before) await rescoreAll();
-    else { apply(); renderBody(); }
+    if (key() !== before) rescoreAll();
+    else {
+      apply();
+      if (ui.tab !== 'interests') renderBody();
+    }
   });
 })();

@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0
+     A fictional link-aggregator front page for testing the zapper's site rule
+     for table-row layouts (core/segment.js). It copies only the row structure
+     such a page uses (a title row, a points row, a spacer); every title,
+     domain, and user here is invented. The browser check serves it at the
+     rule's hostname so the rule applies. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture: link table</title>
+  <style>
+    body { font: 10pt Verdana, sans-serif; margin: 0; background: #fff; }
+    #main { width: 85%; margin: 8px auto; background: #f6f6ef; border-collapse: collapse; }
+    .top { background: #6a8caf; padding: 2px; }
+    .pagetop a { color: #000; margin-right: 4px; }
+    .title { font-size: 10pt; }
+    .subtext { font-size: 7pt; color: #828282; }
+    .spacer { height: 5px; }
+    .rank { color: #828282; }
+  </style>
+</head>
+<body>
+<table id="main">
+  <tr><td class="top"><table><tr>
+    <td><b>Fixture Links</b></td>
+    <td><span class="pagetop"><a href="#">new</a> | <a href="#">past</a> | <a href="#">comments</a> | <a href="#">ask</a> | <a href="#">show</a> | <a href="#">jobs</a> | <a href="#">submit</a> | <a href="#">login</a></span></td>
+  </tr></table></td></tr>
+  <tr class="spacer"><td></td></tr>
+  <tr><td><table class="items">
+    <tr class="athing" id="s1"><td class="rank">1.</td><td class="title"><a href="#">Lakeview district publishes its ransomware recovery report</a> <span>(example.org)</span></td></tr>
+    <tr><td></td><td class="subtext">212 points by quill 4 hours ago | 88 comments</td></tr>
+    <tr class="spacer"></tr>
+    <tr class="athing" id="s2"><td class="rank">2.</td><td class="title"><a href="#">Show: a local-first notes app with a new sync engine</a> <span>(example.net)</span></td></tr>
+    <tr><td></td><td class="subtext">140 points by marlo 6 hours ago | 51 comments</td></tr>
+    <tr class="spacer"></tr>
+    <tr class="athing" id="s3"><td class="rank">3.</td><td class="title"><a href="#">Pop star's surprise wedding sends fans into a frenzy</a> <span>(example.com)</span></td></tr>
+    <tr><td></td><td class="subtext">9 points by rook 2 hours ago | 3 comments</td></tr>
+    <tr class="spacer"></tr>
+    <tr class="athing" id="s4"><td class="rank">4.</td><td class="title"><a href="#">Otters beat the Herons in the regional football final</a> <span>(example.com)</span></td></tr>
+    <tr><td></td><td class="subtext">12 points by finch 3 hours ago | 7 comments</td></tr>
+    <tr class="spacer"></tr>
+    <tr class="athing" id="s5"><td class="rank">5.</td><td class="title"><a href="#">Ask: how do your schools handle data privacy for student records?</a></td></tr>
+    <tr><td></td><td class="subtext">77 points by wren 5 hours ago | 64 comments</td></tr>
+    <tr class="morespace"></tr>
+    <tr><td></td><td class="title"><a class="morelink" href="#">More</a></td></tr>
+  </table></td></tr>
+  <tr><td><center><span class="yclinks"><a href="#">Guidelines</a> | <a href="#">FAQ</a> | <a href="#">Lists</a> | <a href="#">API</a> | <a href="#">Security</a> | <a href="#">Legal</a> | <a href="#">Contact</a></span></center></td></tr>
+</table>
+</body>
+</html>

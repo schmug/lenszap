@@ -4,18 +4,27 @@
 
 The zapper is a Chromium extension. On every page it splits the content into blocks, judges how well each block matches the interest topics in your [Lens Manifest](../spec/lens-manifest.md), and hides the blocks it is confident are off your lens, much like uBlock Origin's element zapper but chosen for you. Every hidden block is listed with its reasoning and can be put back.
 
-![The fictional demo page with off-lens blocks hidden and the ledger open](screenshots/after.jpg)
+![The fictional demo page with off-lens blocks hidden and the ledger open in the sidebar](screenshots/after.jpg)
 
 ## What it does
 
 - **Zaps off-lens blocks.** Each block gets an "off-lens" confidence. A block is hidden when that confidence reaches your threshold. Interests you weight positively keep blocks; interests you weight negatively zap them.
-- **Ledger.** The panel lists every hidden block with the reason it was hidden and a **Show** button. After every pass the zapper checks that the blocks hidden on the page are exactly the ones in the ledger. If they ever differ, it restores everything and says so.
+- **Sidebar.** The zapper's controls sit in a sidebar docked on the right, and the page is narrowed to make room for it. **⟩** shrinks it to a thin strip that still shows how many blocks are hidden.
+- **Ledger.** The sidebar lists every hidden block, with its off-lens score, with the reason it was hidden and a **Show** button. After every pass the zapper checks that the blocks hidden on the page are exactly the ones in the ledger. If they ever differ, it restores everything and says so.
 - **Before / After.** **Before** shows the page as published, with zapped blocks outlined in red.
+- **Score on hover.** Hover over any judged block to see whether it was kept or zapped, its off-lens score against your threshold, how well it matched each interest, and the reason in words. Hidden blocks can't be hovered; use **Before** to see and hover them, or read their reasons in the ledger. Turn this off under **This site**.
 - **Confidence slider.** "Zap when at least this sure." By default it applies everywhere, or you can set it for one site only.
 - **Interest sliders.** One slider per topic in your lens. Changes apply on every page as soon as you move a slider and are kept on this device while you browse. **Save to lens** writes them into your lens as one new version.
+- **Live sliders.** Both kinds of slider re-decide every block on each step, so blocks vanish and come back while you drag. Scores are cached, so nothing is sent to the model again.
+- **Scoring as you watch.** With a model, blocks are scored a few at a time, the ones on screen first, and each is zapped as soon as its answer arrives. A block waiting for the model has a faint dotted outline; one being scored crackles with static; a zapped block flashes and collapses. Set how many requests run at once on the settings page, and turn the animations off under **This site**. They are also off when your system asks for reduced motion.
+- **Site rules.** Some sites lay items out in ways the generic splitter can't find, such as Hacker News, where each story is a set of table rows. A rule in `core/segment.js` makes each story or comment one block there.
 - **Pause on this site**, and **Restore all** on any page.
 
 ![Before: the page as published, with zapped blocks outlined](screenshots/before.jpg)
+
+![Hovering a kept paragraph shows its score, its interest matches, and why it was kept](screenshots/hover.jpg)
+
+![A model scoring the page: blocks being scored crackle with static](screenshots/scoring.jpg)
 
 ## Never zapped
 
@@ -89,7 +98,7 @@ Then choose the **Chat model via Ollama** API with endpoint `http://localhost:11
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
 2. Choose **Load unpacked** and select this `zapper/` directory.
-3. Open any http(s) page. The panel appears in the bottom-right corner.
+3. Open any http(s) page. The sidebar appears on the right.
 
 You can load the reference engine in `poc/` at the same time; the two don't interact. The zapper starts with a copy of the sample lens `avery-daily`. Import your own lens from the settings page, which you open by clicking the toolbar icon.
 
@@ -123,10 +132,11 @@ The zapper reads these from your lens but doesn't act on them, and it lists them
 
 ## Known limits
 
-- **Splitting the page into blocks is heuristic.** Paragraphs, list items, cards, and sidebars become blocks; text under 40 characters is never judged. Odd layouts will split oddly.
+- **Splitting the page into blocks is heuristic.** Paragraphs, list items, table cells, cards, and sidebars become blocks; text under 40 characters is never judged, except an item a site rule names. Odd layouts will split oddly; a site rule is the fix for a site you use a lot.
+- **The sidebar narrows the page.** Most pages reflow to fit. Page headers fixed to the top of the window can run underneath the sidebar.
 - **Content shifts after the page loads.** Blocks are hidden after the page renders, so the layout moves once, and a model scorer adds its own delay.
 - **Prompt injection.** Page text goes to the model as data, with an instruction to ignore instructions inside it. That reduces the risk of a page steering the model, but doesn't remove it.
-- **Pages can tell the extension is installed.** The extension exposes its own module files to pages, so a page can detect it. The panel's closed shadow root keeps page scripts away from its controls.
+- **Pages can tell the extension is installed.** The extension exposes its own module files to pages, so a page can detect it. The sidebar's closed shadow root keeps page scripts away from its controls.
 - **The tool only lists what it hides.** It does not label the blocks it keeps as being on your lens.
 
 ## Tests
@@ -139,9 +149,13 @@ node zapper/test/browser-check.mjs [--screenshots]   # the extension in Chromium
 The browser check loads the unpacked extension against the fictional fixture page and checks:
 - the expected blocks are hidden;
 - controls and the correction never are;
+- the sidebar docks and the page makes room for it;
 - **Before** and **Show** work, and every hidden block is listed;
+- hovering a block shows its score and reason;
+- moving the confidence slider changes what is hidden straight away;
 - saving a slider change writes a valid new lens version;
-- the model-scorer path works over all three APIs (against a stand-in model server), including that a block the model skips stays visible.
+- on a fictional page laid out in table rows (`demo/link-table.html`, served at the Hacker News hostname), each story is one block, and the top links are never judged;
+- the model-scorer path works over all three APIs (against a stand-in model server), including that a block the model skips stays visible, and never sends more requests at once than the setting allows.
 
 The check needs Playwright with Chromium and isn't run in CI.
 
@@ -152,10 +166,11 @@ zapper/
   manifest.json          MV3 manifest
   core/                  pure, DOM-free modules (scoring, decisions, ledger check, lens editing)
   background/            storage, lens saving, local-model requests
-  content/               page segmentation, zapping, and the panel
+  content/               page segmentation, zapping, the sidebar, and the hover popover
   options/               settings page: lens import/export, scorer, local data
   lenses/sample-lens.json
   demo/fixture.html      a fictional page for trying it
+  demo/link-table.html   a fictional table-row link page, for the site-rule check
   bench/                 benchmark: speed and wrong-zap rates for a scorer on your machine
   test/                  Node tests and the browser check
 ```

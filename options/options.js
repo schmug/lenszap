@@ -19,6 +19,7 @@ async function refresh() {
   $('api').value = st.settings.model.api;
   $('endpoint').value = st.settings.model.endpoint;
   $('model').value = st.settings.model.model;
+  $('concurrency').value = String(st.settings.model.concurrency ?? 4);
   $('model-settings').hidden = st.settings.scorer !== 'model';
 
   const local = await chrome.storage.local.get(['draftWeights', 'sites']);
@@ -71,7 +72,12 @@ for (const r of document.querySelectorAll('input[name="scorer"]')) {
 }
 
 async function saveModel() {
-  const model = { api: $('api').value, endpoint: $('endpoint').value.trim(), model: $('model').value.trim() };
+  const model = {
+    api: $('api').value,
+    endpoint: $('endpoint').value.trim(),
+    model: $('model').value.trim(),
+    concurrency: Math.min(8, Math.max(1, Math.round(Number($('concurrency').value)) || 4))
+  };
   if (!isLoopbackEndpoint(model.endpoint)) {
     $('scorer-status').textContent = 'Refused: the endpoint must be on this machine (localhost or 127.0.0.1).';
     return false;
