@@ -536,5 +536,51 @@ await test('train: toExample keeps numbers only, and skips evidence and unscored
   assert.deepEqual(evalTraining([ex], [{ topic: 'a', weight: 1 }], 0.8), { falseZaps: 0, missed: 0, wrong: 0, total: 1 });
 });
 
+// --- Eval tooling (eval/) -----------------------------------------------------
+
+await test('eval: compare counts wrong zaps, misses, ads, evidence, and bad splits', async () => {
+  const { compare, total, rates } = await import('../eval/metrics.mjs');
+  const labels = { a: 'keep', b: 'zap', c: 'ad', d: 'evidence', e: 'chrome', f: 'skip', g: 'zap' };
+  const c = compare(
+    [
+      { key: 'a', zap: true }, { key: 'b', zap: true }, { key: 'c', zap: false }, { key: 'd', zap: true },
+      { key: 'e', zap: true }, { key: 'f', zap: true }, { key: 'g', zap: false }, { key: 'unlabelled', zap: true }
+    ],
+    labels
+  );
+  assert.deepEqual(c.keptHidden, ['a']);
+  assert.deepEqual(c.evidenceHidden, ['d']);
+  assert.deepEqual(c.zapMissed, ['g']);
+  assert.deepEqual(c.adMissed, ['c']);
+  assert.equal(c.labelled, 6, 'skip and unlabelled blocks are not counted');
+  const r = rates(total([c, c]));
+  assert.equal(r.wrongZapRate, 1, 'both blocks that should stay were hidden');
+  assert.equal(r.missRate, 2 / 3);
+  assert.equal(r.precision, 1 / 3);
+  assert.equal(r.splitProblemRate, 1 / 6);
+  assert.deepEqual(rates(total([])), { wrongZapRate: null, missRate: null, precision: null, splitProblemRate: null });
+});
+
+await test('eval: block keys ignore whitespace, and slugs are file-safe', async () => {
+  const { blockKey, slugFor } = await import('../eval/lib.mjs');
+  assert.equal(blockKey('a  b\n c'), blockKey('a b c'));
+  assert.match(blockKey('x'), /^[0-9a-f]{12}$/);
+  assert.equal(slugFor('https://www.bbc.com/news'), 'bbc.com--news');
+  assert.match(slugFor('https://ex.com/a/../b?q=<x>'), /^[a-z0-9.-]+$/);
+});
+
+await test('eval: the demo labels match the demo captures', async () => {
+  const { loadDataset, LABELS } = await import('../eval/lib.mjs');
+  const set = loadDataset(fileURLToPath(new URL('../eval/demo', import.meta.url)));
+  assert.equal(set.length, 2);
+  for (const { slug, page, labels } of set) {
+    const keys = new Set(page.blocks.map((b) => b.key));
+    for (const [k, v] of Object.entries(labels)) {
+      assert.ok(keys.has(k), `${slug}: label for a block that is not captured: ${k}`);
+      assert.ok(v in LABELS, `${slug}: unknown label ${v}`);
+    }
+  }
+});
+
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

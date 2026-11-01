@@ -20,6 +20,9 @@ npm test                 # test/run-tests.mjs — pure modules + Ajv validation 
 npm run browser-check    # test/browser-check.mjs — the extension in Chromium via Playwright (not in CI)
 npm run bench            # bench/bench.mjs — speed and wrong-zap rates for a scorer on this machine
 npm run check-upstream -- /path/to/lenspub   # has LensPub's lens schema moved?
+npm run capture -- URL…   # eval/capture.mjs — real pages → blocks via the extension's splitter (eval/data/, git-ignored)
+npm run label            # eval/label.mjs — local labelling page for captured blocks
+npm run eval             # eval/run.mjs — wrong-zap / miss / ad / evidence / bad-split rates on labelled pages
 ```
 
 No build step and no runtime dependencies: load the directory unpacked.
@@ -47,4 +50,7 @@ No build step and no runtime dependencies: load the directory unpacked.
 - `core/lens-manifest.schema.js` and `core/schema-check.js` are copies of
   LensPub files kept in `upstream/` at the commit in `upstream/LENSPUB_COMMIT`;
   tests assert they match. Change them only by syncing from LensPub.
+- `eval/` is developer tooling, never loaded by the extension. Captured page
+  text stays in `eval/data/` (git-ignored); only fictional demo pages are
+  committed.
 - New code files carry `SPDX-License-Identifier: Apache-2.0`.

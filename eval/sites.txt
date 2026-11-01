@@ -1,0 +1,28 @@
+# A starter set of varied page layouts for the eval. One URL per line; # starts a comment.
+# Swap in the sites you actually read: the eval is most useful on your own browsing.
+# Capture with: npm run capture -- --list eval/sites.txt
+
+# News front pages and articles
+https://apnews.com/
+https://www.bbc.com/news
+https://www.theverge.com/
+https://arstechnica.com/
+
+# Link aggregators and forums
+https://news.ycombinator.com/
+https://old.reddit.com/r/technology/
+https://lobste.rs/
+
+# Reference, Q&A, and blogs
+https://en.wikipedia.org/wiki/Ransomware
+https://stackoverflow.com/questions?tab=Votes
+https://simonwillison.net/
+https://krebsonsecurity.com/
+
+# Ad-heavy layouts (for the ad label)
+https://www.allrecipes.com/
+https://www.weather.com/
+
+# Code and products
+https://github.com/trending
+https://www.producthunt.com/

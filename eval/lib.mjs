@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Shared helpers for the eval tools (capture, label, run). Node only: these are
+// developer tools, not part of the extension, and never loaded by it.
+//
+// An eval data directory holds two folders:
+//   pages/<slug>.json   blocks captured from one page by eval/capture.mjs
+//   labels/<slug>.json  your keep/zap/... label for each block, keyed by block key
+// A block key is a hash of the block's text, so labels survive a recapture as
+// long as the text is unchanged. Labels hold keys and labels only, no text.
+
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** Labels a block can have. `keep` and `zap` are judged against the lens. */
+export const LABELS = Object.freeze({
+  keep: 'On your lens: should stay visible.',
+  zap: 'Off your lens: should be hidden.',
+  ad: 'An ad or sponsored block: should be hidden.',
+  evidence: 'A correction or primary source: must never be hidden.',
+  chrome: 'Page chrome or controls the splitter should not have made a block.',
+  mixed: 'Several unrelated items run together: the splitter should have split it.',
+  skip: 'Not counted.'
+});
+
+/** Labels that mean "this block should be hidden". */
+export const SHOULD_HIDE = new Set(['zap', 'ad']);
+/** Labels that mean "this block should be visible". */
+export const SHOULD_KEEP = new Set(['keep', 'evidence']);
+/** Labels that report a splitting problem rather than a scoring one. */
+export const SPLIT_PROBLEM = new Set(['chrome', 'mixed']);
+
+export const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+/** Stable key for a block's text. */
+export function blockKey(text) {
+  return createHash('sha256').update(norm(text)).digest('hex').slice(0, 12);
+}
+
+/** A file-name-safe slug for a URL: host plus a short path. */
+export function slugFor(url) {
+  const u = new URL(url);
+  const path = (u.pathname + u.search).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return `${u.hostname.replace(/^www\./, '')}${path ? `--${path}` : ''}`.toLowerCase();
+}
+
+const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
+
+/**
+ * Load every captured page in a data directory, with its labels if any.
+ * @returns {{slug: string, page: object, labels: Record<string, string>}[]}
+ */
+export function loadDataset(dir) {
+  const pagesDir = join(dir, 'pages');
+  if (!existsSync(pagesDir)) return [];
+  return readdirSync(pagesDir)
+    .filter((f) => f.endsWith('.json'))
+    .sort()
+    .map((f) => {
+      const slug = f.slice(0, -5);
+      const labelPath = join(dir, 'labels', f);
+      const labels = existsSync(labelPath) ? readJson(labelPath).labels ?? {} : {};
+      return { slug, page: readJson(join(pagesDir, f)), labels };
+    });
+}
+
+/** Parse --flag value pairs; a flag with no value is `true`. Positional args go in `_`. */
+export function parseArgs(argv) {
+  const out = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith('--')) {
+      out._.push(a);
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next !== undefined && !next.startsWith('--')) {
+      out[a.slice(2)] = next;
+      i++;
+    } else out[a.slice(2)] = true;
+  }
+  return out;
+}

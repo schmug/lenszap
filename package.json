@@ -9,7 +9,10 @@
     "test": "node test/run-tests.mjs",
     "bench": "node bench/bench.mjs",
     "browser-check": "node test/browser-check.mjs",
-    "check-upstream": "node scripts/check-upstream.mjs"
+    "check-upstream": "node scripts/check-upstream.mjs",
+    "capture": "node eval/capture.mjs",
+    "label": "node eval/label.mjs",
+    "eval": "node eval/run.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

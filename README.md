@@ -104,6 +104,36 @@ ollama pull qwen3:4b
 
 Then choose the **Chat model via Ollama** API with endpoint `http://localhost:11434` and model `qwen3:4b`.
 
+## Measuring it on real pages
+
+The benchmark above scores 28 hand-written passages. The eval scores real pages, split into blocks by the extension's own splitter, against labels you give them. It reports:
+- how often a block you wanted was hidden;
+- how often an off-lens block or an ad stayed;
+- whether a correction was ever hidden (this must never happen);
+- how often the splitter made a bad block;
+- how long the model took per block.
+
+```
+npm run capture -- --list eval/sites.txt        # or name URLs; add --headed if a site blocks headless browsers
+npm run label                                   # opens a labelling page at http://127.0.0.1:8765/
+npm run eval                                    # word-only baseline
+npm run eval -- --api systemone --show          # plus your llama-server model, listing every mistake
+npm run eval -- --lens my-lens.json --at 0.7    # your own lens, detail at a 70% threshold
+```
+
+Captures and labels go to `eval/data/`, which git ignores, because captured text is the sites' own content. Label against the lens you pass with `--lens`; the labeller records which lens it was.
+
+| Label | Meaning |
+|---|---|
+| keep | On your lens; should stay |
+| zap | Off your lens; should be hidden |
+| ad | An ad or sponsored block; should be hidden |
+| evidence | A correction or primary source; must never be hidden |
+| chrome | Page chrome the splitter shouldn't have made a block |
+| mixed | Several items run together; the splitter should have split it |
+
+`eval/demo/` holds the two fictional demo pages, captured and labelled, so `npm run eval -- --data eval/demo` works without capturing anything.
+
 ## Install
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
@@ -188,6 +218,7 @@ lenszap/
   demo/fixture.html      a fictional page for trying it
   demo/link-table.html   a fictional table-row link page, for the site-rule check
   bench/                 benchmark: speed and wrong-zap rates for a scorer on your machine
+  eval/                  capture real pages, label their blocks, and measure mistakes (developer tool)
   test/                  Node tests and the browser check
 ```
 

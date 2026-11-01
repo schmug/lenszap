@@ -1,0 +1,113 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LensZap labeller</title>
+<style>
+  :root { --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc; --sel: #3a5bd9;
+    --keep: #2e9b57; --zap: #d63b3b; --ad: #b86e00; --evidence: #2c6fb5; --chrome: #777; --mixed: #8a4fbf; --skip: #aaa; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #18181a; --fg: #ececea; --muted: #9a9a95; --line: #2e2e31; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
+  aside { border-right: 1px solid var(--line); overflow: auto; padding: 12px; }
+  aside h1 { font-size: 15px; margin: 0 0 4px; }
+  aside p { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  aside button { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px; }
+  aside button.on { background: color-mix(in srgb, var(--sel) 14%, transparent); }
+  aside small { color: var(--muted); }
+  main { overflow: auto; padding: 12px 20px 80px; }
+  .help { color: var(--muted); font-size: 13px; position: sticky; top: 0; background: var(--bg); padding: 6px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 8px; z-index: 1; }
+  .help kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 12px; }
+  .b { display: grid; grid-template-columns: 90px 1fr; gap: 10px; padding: 8px; border-radius: 8px; border-left: 4px solid transparent; cursor: pointer; }
+  .b.cur { outline: 2px solid var(--sel); }
+  .b .lab { font-size: 12px; font-weight: 600; text-transform: uppercase; }
+  .b .meta { color: var(--muted); font-size: 11px; }
+  .b .t { max-height: 7.5em; overflow: hidden; }
+  .btns { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .btns button { font-size: 11px; border: 1px solid var(--line); background: none; color: inherit; border-radius: 4px; padding: 1px 6px; cursor: pointer; }
+  #status { position: fixed; bottom: 10px; right: 16px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>LensZap labeller</h1>
+  <p id="lens"></p>
+  <div id="pages"></div>
+</aside>
+<main>
+  <div class="help">Label each block against your lens. <kbd>↑</kbd><kbd>↓</kbd> or <kbd>j</kbd><kbd>k</kbd> move ·
+    <kbd>1</kbd> keep · <kbd>2</kbd> zap · <kbd>3</kbd> ad · <kbd>4</kbd> evidence · <kbd>5</kbd> chrome (shouldn't be a block) ·
+    <kbd>6</kbd> mixed (should be split) · <kbd>0</kbd> skip · <kbd>Backspace</kbd> clear. Labels save as you go.</div>
+  <div id="blocks"></div>
+</main>
+<div id="status"></div>
+<script>
+const KEYS = { 1: 'keep', 2: 'zap', 3: 'ad', 4: 'evidence', 5: 'chrome', 6: 'mixed', 0: 'skip' };
+let meta = null, slug = null, page = null, labels = {}, cur = 0, saveTimer = null;
+const $ = (s) => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+
+async function loadPages() {
+  meta = await (await fetch('/api/pages')).json();
+  $('#lens').textContent = `Lens: ${meta.lens}`;
+  $('#pages').replaceChildren(...meta.pages.map((p) => {
+    const b = el('button', { className: p.slug === slug ? 'on' : '', onclick: () => open(p.slug) },
+      p.slug, el('br'), el('small', { textContent: `${p.labelled}/${p.blocks} labelled` }));
+    return b;
+  }));
+  if (!meta.pages.length) $('#blocks').textContent = 'No captured pages yet. Run npm run capture first.';
+}
+
+async function open(s) {
+  slug = s; cur = 0;
+  ({ page, labels } = await (await fetch(`/api/page/${encodeURIComponent(s)}`)).json());
+  render(); loadPages();
+}
+
+function render() {
+  $('#blocks').replaceChildren(...page.blocks.map((b, i) => {
+    const l = labels[b.key];
+    const row = el('div', { className: 'b' + (i === cur ? ' cur' : ''), onclick: () => { cur = i; render(); } },
+      el('div', {}, el('div', { className: 'lab', textContent: l ?? '·' }),
+        el('div', { className: 'meta', textContent: `${b.tag}${b.adHint ? ' · ad?' : ''}${b.linkShare > 0.6 ? ' · links' : ''}` })),
+      el('div', {}, el('div', { className: 't', textContent: b.text }),
+        el('div', { className: 'btns' }, ...Object.entries(KEYS).map(([k, name]) =>
+          el('button', { textContent: `${k} ${name}`, onclick: (e) => { e.stopPropagation(); cur = i; set(name); } })))));
+    row.style.borderLeftColor = l ? `var(--${l})` : 'transparent';
+    return row;
+  }));
+  document.querySelectorAll('.b')[cur]?.scrollIntoView({ block: 'nearest' });
+}
+
+function set(name) {
+  const k = page.blocks[cur].key;
+  if (name) labels[k] = name; else delete labels[k];
+  if (name && cur < page.blocks.length - 1) cur++;
+  render(); save();
+}
+
+function save() {
+  clearTimeout(saveTimer);
+  $('#status').textContent = 'Saving…';
+  saveTimer = setTimeout(async () => {
+    const r = await fetch(`/api/labels/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify({ labels }) });
+    $('#status').textContent = r.ok ? `Saved ${(await r.json()).saved} labels` : 'Save failed';
+    loadPages();
+  }, 300);
+}
+
+addEventListener('keydown', (e) => {
+  if (!page) return;
+  if (e.key in KEYS) set(KEYS[e.key]);
+  else if (e.key === 'Backspace') set(null);
+  else if (e.key === 'ArrowDown' || e.key === 'j') { cur = Math.min(page.blocks.length - 1, cur + 1); render(); }
+  else if (e.key === 'ArrowUp' || e.key === 'k') { cur = Math.max(0, cur - 1); render(); }
+  else return;
+  e.preventDefault();
+});
+loadPages();
+</script>
+</body>
+</html>
