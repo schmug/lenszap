@@ -39,13 +39,25 @@
 <main>
   <div class="help">Label each block against your lens. <kbd>↑</kbd><kbd>↓</kbd> or <kbd>j</kbd><kbd>k</kbd> move ·
     <kbd>1</kbd> keep · <kbd>2</kbd> zap · <kbd>3</kbd> ad · <kbd>4</kbd> evidence · <kbd>5</kbd> chrome (shouldn't be a block) ·
-    <kbd>6</kbd> mixed (should be split) · <kbd>0</kbd> skip · <kbd>Backspace</kbd> clear. Labels save as you go.</div>
+    <kbd>6</kbd> mixed (should be split) · <kbd>0</kbd> skip · <kbd>Backspace</kbd> clear. Labels save as you go.
+    <br>Showing <select id="sample"><option value="15">a random 15 blocks</option><option value="30">a random 30 blocks</option><option value="0">every block</option></select> per page.
+    A random sample measures the zapper just as fairly; label more pages rather than more of one page.</div>
   <div id="blocks"></div>
 </main>
 <div id="status"></div>
 <script>
 const KEYS = { 1: 'keep', 2: 'zap', 3: 'ad', 4: 'evidence', 5: 'chrome', 6: 'mixed', 0: 'skip' };
-let meta = null, slug = null, page = null, labels = {}, cur = 0, saveTimer = null;
+let meta = null, slug = null, page = null, all = [], labels = {}, cur = 0, saveTimer = null;
+let sampleSize = 15;
+try { sampleSize = Number(localStorage.getItem('lpz-sample') ?? 15); } catch {}
+// Block keys are text hashes, so ordering by key is a fixed random order: the
+// same blocks are sampled every time, and blocks you already labelled stay in.
+const sample = (blocks) => {
+  if (!sampleSize) return blocks;
+  const pick = new Set([...blocks].sort((a, b) => (a.key < b.key ? -1 : 1)).slice(0, sampleSize).map((b) => b.key));
+  for (const b of blocks) if (labels[b.key]) pick.add(b.key);
+  return blocks.filter((b) => pick.has(b.key));
+};
 const $ = (s) => document.querySelector(s);
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
 
@@ -53,8 +65,9 @@ async function loadPages() {
   meta = await (await fetch('/api/pages')).json();
   $('#lens').textContent = `Lens: ${meta.lens}`;
   $('#pages').replaceChildren(...meta.pages.map((p) => {
+    const goal = sampleSize ? Math.min(sampleSize, p.blocks) : p.blocks;
     const b = el('button', { className: p.slug === slug ? 'on' : '', onclick: () => open(p.slug) },
-      p.slug, el('br'), el('small', { textContent: `${p.labelled}/${p.blocks} labelled` }));
+      (p.labelled >= goal ? '✓ ' : '') + p.slug, el('br'), el('small', { textContent: `${p.labelled}/${goal} labelled · ${p.blocks} blocks` }));
     return b;
   }));
   if (!meta.pages.length) $('#blocks').textContent = 'No captured pages yet. Run npm run capture first.';
@@ -63,6 +76,8 @@ async function loadPages() {
 async function open(s) {
   slug = s; cur = 0;
   ({ page, labels } = await (await fetch(`/api/page/${encodeURIComponent(s)}`)).json());
+  all = page.blocks;
+  page = { ...page, blocks: sample(all) };
   render(); loadPages();
 }
 
@@ -84,8 +99,16 @@ function render() {
 function set(name) {
   const k = page.blocks[cur].key;
   if (name) labels[k] = name; else delete labels[k];
+  const done = name && page.blocks.every((b) => labels[b.key]);
   if (name && cur < page.blocks.length - 1) cur++;
   render(); save();
+  // Finished this page's sample: move on to the next page that isn't done.
+  if (done) setTimeout(() => {
+    const i = meta.pages.findIndex((p) => p.slug === slug);
+    const next = [...meta.pages.slice(i + 1), ...meta.pages.slice(0, i)]
+      .find((p) => p.labelled < (sampleSize ? Math.min(sampleSize, p.blocks) : p.blocks));
+    if (next) open(next.slug);
+  }, 700);
 }
 
 function save() {
@@ -106,6 +129,13 @@ addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowUp' || e.key === 'k') { cur = Math.max(0, cur - 1); render(); }
   else return;
   e.preventDefault();
+});
+const sel = $('#sample');
+sel.value = String(sampleSize);
+sel.addEventListener('change', () => {
+  sampleSize = Number(sel.value);
+  try { localStorage.setItem('lpz-sample', String(sampleSize)); } catch {}
+  if (slug) open(slug); else loadPages();
 });
 loadPages();
 </script>

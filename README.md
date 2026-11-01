@@ -126,6 +126,8 @@ npm run eval -- --api systemone --method both --zap-ads   # per-topic vs label-f
 
 **Label-first scoring** (`--method categories`, experimental, decision models only) first gives each block a confidence for each of a fixed list of categories (`core/categorize.js`), whatever your lens is. It then relates each lens topic to those categories once. A block's match to a topic is its best category confidence × relevance. The categories don't depend on the lens, so they could be cached across lens edits and sites. The cost is about 23 questions per block instead of one per topic. The eval shows whether that is worth it. `--zap-ads` adds a "less of this" priority for ads, which label-first scoring matches straight to its ad category.
 
+The labeller shows a fixed random sample of 15 blocks per page by default (or 30, or all), and moves on to the next page when you finish one. A sample measures the zapper just as fairly, so label more pages rather than more of one page.
+
 Captures and labels go to `eval/data/`, which git ignores, because captured text is the sites' own content. Label against the lens you pass with `--lens`; the labeller records which lens it was.
 
 | Label | Meaning |
