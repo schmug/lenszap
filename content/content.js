@@ -119,7 +119,8 @@
     return {
       chars: text.length,
       leafy: LEAFY.has(tag),
-      containerish: CONTAINER.has(tag) || role === 'article' || role === 'listitem',
+      // A link that wraps a whole card, and custom elements (<story-card>), are items too.
+      containerish: CONTAINER.has(tag) || tag === 'A' || tag.includes('-') || role === 'article' || role === 'listitem',
       headings: el.querySelectorAll('h2, h3, h4, h5, h6, [role="heading"]').length,
       storyLinks: storyHrefs.size,
       links: anchors.length,

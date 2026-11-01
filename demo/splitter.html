@@ -44,6 +44,13 @@
     </ol>
   </section>
 
+  <!-- Cards that are whole links, with the headline in spans (no headings): each card is a block. -->
+  <div class="card">
+    <a href="/v1" id="vcard1" data-expect="block"><span>Video</span><span>Kayakers paddle down a flooded main street after the storm</span></a>
+    <a href="/v2" id="vcard2" data-expect="block"><span>Video</span><span>Watch the valley fog roll over the ridge at sunrise</span></a>
+    <story-card id="vcard3" data-expect="block"><span><a href="/v3">Rain gauge readings set a record for the third straight week</a></span></story-card>
+  </div>
+
   <!-- A long post: paragraphs are blocks; the caption joins the paragraph before it; the tag line is chrome. -->
   <article>
     <h1>Inside the district's new incident response plan</h1>
