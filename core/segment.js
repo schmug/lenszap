@@ -68,6 +68,8 @@ export const MIN_CHARS = 40;
 export const MIN_HEADLINE_CHARS = 20;
 /** Longest container kept as one block. */
 export const MAX_CONTAINER_CHARS = 1200;
+/** Longest container that can be skipped as a line or list of short links. */
+export const LINK_LINE_MAX_CHARS = 600;
 /** A link at least this long reads as a story headline, not a tag or a control. */
 export const STORY_LINK_CHARS = 25;
 
@@ -93,8 +95,10 @@ export const STORY_LINK_CHARS = 25;
 export function splitDecision(m) {
   const min = m.inStories && m.hasLink ? MIN_HEADLINE_CHARS : MIN_CHARS;
   if (m.chars < min) return 'skip';
-  // Mostly short links: tags, categories, tabs, a pager.
-  if (m.links >= 3 && m.linkLetters >= 0.7 * m.letters && m.linkChars / m.links < 20) return 'skip';
+  // Mostly short links: tags, categories, tabs, a pager. Only a small element:
+  // a whole page or column can be mostly short links and still hold stories.
+  const small = m.leafy || (m.chars <= LINK_LINE_MAX_CHARS && m.storyLinks === 0);
+  if (small && m.links >= 3 && m.linkLetters >= 0.7 * m.letters && m.linkChars / m.links < 20) return 'skip';
   if (m.hasControls) return 'split';
   if (m.leafy) return 'block';
   if (!m.containerish || m.chars > MAX_CONTAINER_CHARS) return 'split';

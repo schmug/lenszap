@@ -26,7 +26,7 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS }, { toExample }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS }, { toExample }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
@@ -177,6 +177,12 @@
         const text = norm(child.textContent);
         if (text.length < MIN_HEADLINE_CHARS) continue;
         if (child.getClientRects().length === 0) continue; // not rendered
+        // Too long to be one block: walk in without measuring (measuring every
+        // level of a big page is slow, and the answer is always 'split').
+        if (!LEAFY.has(child.tagName) && text.length > MAX_CONTAINER_CHARS) {
+          walk(child, inStories);
+          continue;
+        }
         const m = measure(child, text, inStories);
         const what = splitDecision(m);
         if (what === 'block' && child.matches(CAPTION) && !m.headings) {

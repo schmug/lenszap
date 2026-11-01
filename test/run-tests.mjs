@@ -440,6 +440,11 @@ await test('splitDecision: one titled item stays whole, several stories split, l
   assert.equal(splitDecision({ ...headline, inStories: false }), 'skip');
   // A tag line, a category list, a pager: mostly short links.
   assert.equal(splitDecision({ ...base, chars: 62, letters: 45, leafy: true, links: 5, linkChars: 50, linkLetters: 42 }), 'skip');
+  // A whole page wrapper that is mostly short links (nav, repo names) is split, never skipped.
+  assert.equal(splitDecision({ ...base, chars: 5000, letters: 4000, links: 300, linkChars: 4000, linkLetters: 3500, storyLinks: 0 }), 'split');
+  assert.equal(splitDecision({ ...base, chars: 900, letters: 700, links: 40, linkChars: 700, linkLetters: 600, headings: 3, storyLinks: 0 }), 'split');
+  // A short sidebar of short links is chrome, even with a title heading.
+  assert.equal(splitDecision({ ...base, chars: 400, letters: 330, links: 25, linkChars: 360, linkLetters: 300, headings: 1, storyLinks: 0 }), 'skip');
   // A paragraph with a couple of links stays a block.
   assert.equal(splitDecision({ ...base, leafy: true, links: 2, linkChars: 30, linkLetters: 26 }), 'block');
   // Controls inside: split, so the control is never hidden with the block.
