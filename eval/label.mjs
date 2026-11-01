@@ -34,7 +34,7 @@ createServer((req, res) => {
       lens: lensId,
       labels: LABELS,
       pages: loadDataset(dataDir).map(({ slug, page, labels }) => ({
-        slug, url: page.url, blocks: page.blocks.length, labelled: Object.keys(labels).length
+        slug, url: page.url, blocks: page.blocks.length, labelled: page.blocks.filter((b) => labels[b.key]).length
       }))
     });
   }

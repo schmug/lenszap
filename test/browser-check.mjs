@@ -31,6 +31,7 @@ if (shots) mkdirSync(shots, { recursive: true });
 
 const html = readFileSync(join(zapperDir, 'demo/fixture.html'));
 const linkTable = readFileSync(join(zapperDir, 'demo/link-table.html'));
+const splitter = readFileSync(join(zapperDir, 'demo/splitter.html'));
 const server = createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -296,6 +297,28 @@ await page.mouse.move(5, 5);
 await panel.click('button:text-is("Resume on this site")');
 await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]').length > 0, null, { timeout: 5000 });
 await settle();
+
+// --- Generic splitter: each layout in demo/splitter.html splits as marked ------
+await context.route('https://splitter.example/**', (route) =>
+  route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: splitter }));
+await page.goto('https://splitter.example/');
+await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
+await settle();
+const splitProblems = await page.evaluate(() => {
+  const blockOf = (el) => el.closest('[data-lpz-id]')?.getAttribute('data-lpz-id') ?? null;
+  const bad = [];
+  for (const el of document.querySelectorAll('[data-expect]')) {
+    const want = el.getAttribute('data-expect');
+    const got = blockOf(el);
+    const name = el.id || el.textContent.trim().slice(0, 30);
+    if (want === 'none' && (got || el.querySelector('[data-lpz-id]'))) bad.push(`${name}: should be in no block`);
+    if (want === 'block' && el.getAttribute('data-lpz-id') == null) bad.push(`${name}: should be a block (is in ${got})`);
+    if (want.startsWith('with:') && (!got || got !== blockOf(document.getElementById(want.slice(5))))) bad.push(`${name}: should be with ${want.slice(5)} (is in ${got})`);
+  }
+  return bad;
+});
+assert.deepEqual(splitProblems, [], `splitter fixture:\n${splitProblems.join('\n')}`);
+console.log('splitter fixture: every layout split as marked');
 
 // --- Site rule: table-row stories are one block each -------------------------
 await context.route('https://news.ycombinator.com/**', (route) =>

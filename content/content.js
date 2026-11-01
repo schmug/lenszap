@@ -26,7 +26,7 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder }, { toExample }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS }, { toExample }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
@@ -70,13 +70,10 @@
 
   // --- Segmentation ----------------------------------------------------------
 
-  const MIN_CHARS = 40;
-  const MAX_CONTAINER_CHARS = 1200;
   // Text elements: always one block, however long.
   const LEAFY = new Set(['P', 'BLOCKQUOTE', 'PRE', 'DD', 'FIGCAPTION']);
-  // Elements that are one block when short and holding one item, and are
-  // split into their children otherwise. A table cell holding a whole list of
-  // stories is a container, not a paragraph.
+  // Elements that may be one block (one item, short enough) or be split into
+  // their children; core/segment.js splitDecision decides which.
   const CONTAINER = new Set(['ARTICLE', 'SECTION', 'ASIDE', 'DIV', 'TR', 'TD', 'LI', 'FIGURE', 'UL', 'OL']);
   // Never zapped and never descended into: page controls and chrome.
   const STRUCTURAL = [
@@ -87,18 +84,53 @@
     '[role="menu"]', '[aria-modal="true"]', '[contenteditable="true"]',
     ...(rule?.structural ? [rule.structural] : [])
   ].join(',');
-  // A container holding one of these is split into its parts instead.
+  // A container holding one of these is split into its parts instead. A form
+  // that is only buttons (a Star or Follow button on a card) does not count:
+  // it goes with its item.
+  const TEXT_INPUT = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"])';
   const SPLIT_IF_CONTAINS = [
-    'h1, form, input, textarea, select, dialog, [role="dialog"], nav, [data-lpz-id]',
+    `h1, form:has(${TEXT_INPUT}, textarea, select), ${TEXT_INPUT}, textarea, select, dialog, [role="dialog"], nav, [data-lpz-id]`,
     ...(rule?.structural ? [rule.structural] : [])
   ].join(',');
+  // Image captions are not blocks of their own: they join the nearest block.
+  const CAPTION = 'figure, figcaption, [class*="caption" i]';
 
   const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
-  function hasSeveralItems(el) {
-    let n = 0;
-    for (const c of el.children) if (norm(c.textContent).length >= MIN_CHARS && ++n >= 2) return true;
-    return false;
+  const letterCount = (s) => (s.match(/\p{L}/gu) ?? []).length;
+
+  /** The numbers splitDecision needs, measured on one element. */
+  function measure(el, text, inStories) {
+    const tag = el.tagName;
+    const role = el.getAttribute('role');
+    const anchors = el.tagName === 'A' ? [el] : [...el.querySelectorAll('a[href]')];
+    let linkChars = 0;
+    let linkLetters = 0;
+    const storyHrefs = new Set();
+    for (const a of anchors) {
+      const at = norm(a.textContent);
+      const t = at.length;
+      linkChars += t;
+      linkLetters += letterCount(at);
+      if (t >= STORY_LINK_CHARS) storyHrefs.add(a.getAttribute('href'));
+    }
+    let several = 0;
+    for (const c of el.children) if (norm(c.textContent).length >= MIN_CHARS) several++;
+    return {
+      chars: text.length,
+      leafy: LEAFY.has(tag),
+      containerish: CONTAINER.has(tag) || role === 'article' || role === 'listitem',
+      headings: el.querySelectorAll('h2, h3, h4, h5, h6, [role="heading"]').length,
+      storyLinks: storyHrefs.size,
+      links: anchors.length,
+      linkChars,
+      letters: letterCount(text),
+      linkLetters,
+      severalChildren: several >= 2,
+      hasControls: !!el.querySelector(SPLIT_IF_CONTAINS),
+      inStories,
+      hasLink: anchors.length > 0
+    };
   }
 
   function register(els, text) {
@@ -132,26 +164,33 @@
         added.push(register(els, text));
       }
     }
-    (function walk(el) {
+    (function walk(el, inStories) {
+      let last = null; // the block before this point among el's children
+      let captions = []; // captions waiting for the next block
+      const attach = (id, els) => {
+        const b = blocks.get(id);
+        for (const c of els) { c.setAttribute('data-lpz-id', id); b.els.push(c); }
+      };
       for (const child of el.children) {
         if (child === overlayHost || child.hasAttribute('data-lpz-id')) continue;
         if (child.matches(STRUCTURAL)) continue;
         const text = norm(child.textContent);
-        if (text.length < MIN_CHARS) continue;
+        if (text.length < MIN_HEADLINE_CHARS) continue;
         if (child.getClientRects().length === 0) continue; // not rendered
-        const tag = child.tagName;
-        const role = child.getAttribute('role');
-        const containerish = CONTAINER.has(tag) || role === 'article' || role === 'listitem';
-        // A container of several text-bearing children (a list, a sidebar of
-        // cards, a comment thread) is split so each item is judged on its own.
-        const selectable =
-          (LEAFY.has(tag) ||
-            (containerish && text.length <= MAX_CONTAINER_CHARS && !hasSeveralItems(child))) &&
-          !child.querySelector(SPLIT_IF_CONTAINS);
-        if (selectable) added.push(register([child], text));
-        else walk(child);
+        const m = measure(child, text, inStories);
+        const what = splitDecision(m);
+        if (what === 'block' && child.matches(CAPTION) && !m.headings) {
+          if (last) attach(last, [child]);
+          else captions.push(child);
+        } else if (what === 'block') {
+          last = register([child], text);
+          added.push(last);
+          if (captions.length) { attach(last, captions); captions = []; }
+        } else if (what === 'split') {
+          walk(child, inStories || m.headings >= 2 || m.storyLinks >= 2);
+        }
       }
-    })(document.body);
+    })(document.body, false);
     return added;
   }
 

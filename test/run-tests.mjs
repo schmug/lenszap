@@ -42,7 +42,7 @@ import {
 } from '../core/model-scorer.js';
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
-import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES } from '../core/segment.js';
+import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision } from '../core/segment.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -424,6 +424,44 @@ await test('groupWithFollowing takes an item and its rows up to the next stop', 
   assert.deepEqual(groupWithFollowing(rows[0], stop).map((r) => r.kind), ['athing', 'sub', 'spacer']);
   assert.deepEqual(groupWithFollowing(rows[3], stop).map((r) => r.kind), ['athing', 'sub']);
   assert.deepEqual(groupWithFollowing(rows[6], stop).map((r) => r.kind), ['more']);
+});
+
+await test('splitDecision: one titled item stays whole, several stories split, link lines are chrome', () => {
+  const base = { chars: 300, letters: 250, leafy: false, containerish: true, headings: 0, storyLinks: 0, links: 0, linkChars: 0, linkLetters: 0, severalChildren: false, hasControls: false };
+  // A repo card: one heading, a description and a stats row (several children).
+  assert.equal(splitDecision({ ...base, headings: 1, storyLinks: 1, links: 3, linkChars: 30, linkLetters: 20, severalChildren: true }), 'block');
+  // A card holding two teasers.
+  assert.equal(splitDecision({ ...base, headings: 2, storyLinks: 2, links: 2, linkChars: 80, linkLetters: 70 }), 'split');
+  // A "Most read" list: one title heading, many headline links.
+  assert.equal(splitDecision({ ...base, headings: 1, storyLinks: 5, links: 5, linkChars: 200, linkLetters: 170 }), 'split');
+  // Inside it, a 30-character headline is a block; outside a list of stories it is too short.
+  const headline = { ...base, chars: 30, letters: 25, containerish: true, links: 1, linkChars: 30, linkLetters: 25, storyLinks: 1, hasLink: true };
+  assert.equal(splitDecision({ ...headline, inStories: true }), 'block');
+  assert.equal(splitDecision({ ...headline, inStories: false }), 'skip');
+  // A tag line, a category list, a pager: mostly short links.
+  assert.equal(splitDecision({ ...base, chars: 62, letters: 45, leafy: true, links: 5, linkChars: 50, linkLetters: 42 }), 'skip');
+  // A paragraph with a couple of links stays a block.
+  assert.equal(splitDecision({ ...base, leafy: true, links: 2, linkChars: 30, linkLetters: 26 }), 'block');
+  // Controls inside: split, so the control is never hidden with the block.
+  assert.equal(splitDecision({ ...base, headings: 1, hasControls: true }), 'split');
+  // Too long to be one item.
+  assert.equal(splitDecision({ ...base, chars: 5000, headings: 1 }), 'split');
+});
+
+await test('carryLabels: unchanged keys keep labels, parts of one labelled block inherit, parts of a mixed block do not', async () => {
+  const { carryLabels, blockKey } = await import('../eval/lib.mjs');
+  const mk = (text) => ({ key: blockKey(text), text });
+  const repo = mk('owner / tool A tool for things. TypeScript 120 stars today');
+  const multi = mk('Story one about schools. Story two about sports.');
+  const para = mk('A paragraph that does not change at all between splits.');
+  const old = [repo, multi, para];
+  const labels = { [repo.key]: 'keep', [multi.key]: 'mixed', [para.key]: 'zap' };
+  const next = [mk('A tool for things.'), mk('Story one about schools.'), para];
+  const c = carryLabels(old, labels, next);
+  assert.equal(c.labels[para.key], 'zap');
+  assert.equal(c.labels[next[0].key], 'keep');
+  assert.equal(c.labels[next[1].key], undefined);
+  assert.deepEqual([c.kept, c.inherited, c.unlabelled], [1, 1, 1]);
 });
 
 await test('scoringOrder: on screen top to bottom, then below nearest first, then above', () => {

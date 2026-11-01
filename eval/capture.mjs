@@ -11,6 +11,14 @@
 //   node eval/capture.mjs https://example.com/a https://example.com/b
 //   node eval/capture.mjs --list eval/sites.txt
 //   node eval/capture.mjs --file demo/fixture.html --as https://fixture.example/ --data eval/demo
+//   node eval/capture.mjs --resplit            # re-split saved snapshots with the current splitter
+//
+// Each capture also saves the page's HTML (scripts removed) to
+// <data>/snapshots/<slug>.html. --resplit loads those snapshots instead of the
+// live sites, so a splitter change can be measured on the same pages: blocks
+// whose text is unchanged keep their labels, a block cut out of one labelled
+// block inherits its label (unless that block was labelled mixed), and the rest
+// are left for `npm run label`.
 //
 // Options: --data DIR (default eval/data, which git ignores)  --wait MS (default 3000)
 //          --headed (show the browser; some sites block headless ones)  --shots
@@ -18,12 +26,12 @@
 // This fetches the pages you name, from this machine, like a browser would.
 // Captured text is the sites' own content: keep it out of public places.
 
-import { mkdirSync, writeFileSync, readFileSync, mkdtempSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, mkdtempSync, existsSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { blockKey, slugFor, parseArgs } from './lib.mjs';
+import { blockKey, slugFor, parseArgs, carryLabels } from './lib.mjs';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -53,16 +61,31 @@ if (args.list) {
     if (t) targets.push(t);
   }
 }
+// --resplit: every saved snapshot, served at its own address.
+const snapshots = new Map(); // url → html
+if (args.resplit) {
+  const dir = join(dataDir, 'snapshots');
+  if (!existsSync(dir)) {
+    console.error(`No snapshots in ${dir}. Capture pages first (this version saves them).`);
+    process.exit(2);
+  }
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.html'))) {
+    const html = readFileSync(join(dir, f), 'utf8');
+    const url = html.match(/<base href="([^"]+)"/)?.[1];
+    if (url) { snapshots.set(url, html); targets.push(url); }
+  }
+}
 if (args.file) {
   if (!args.as) throw new Error('--file needs --as <url> to say which address the page is served at');
   targets.push(args.as);
 }
-if (targets.length === 0) {
+if (targets.length === 0 && !args.resplit) {
   console.error('Name at least one URL, or --list FILE, or --file PATH --as URL.');
   process.exit(2);
 }
 
 mkdirSync(join(dataDir, 'pages'), { recursive: true });
+mkdirSync(join(dataDir, 'snapshots'), { recursive: true });
 if (args.shots) mkdirSync(join(dataDir, 'shots'), { recursive: true });
 
 let context;
@@ -83,6 +106,9 @@ if (args.file) {
   const body = readFileSync(args.file);
   await context.route(args.as, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body }));
 }
+for (const [url, body] of snapshots) {
+  await context.route(url, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body }));
+}
 
 let failed = 0;
 for (const url of targets) {
@@ -98,7 +124,26 @@ for (const url of targets) {
       }
       scrollTo(0, 0);
     });
-    await page.waitForTimeout(wait);
+    await page.waitForTimeout(snapshots.has(url) ? Math.min(wait, 1500) : wait);
+    const slug = slugFor(url);
+    if (!snapshots.has(url)) {
+      // The page as published, for --resplit: no scripts, no marks from the extension.
+      const html = await page.evaluate((base) => {
+        const doc = document.documentElement.cloneNode(true);
+        doc.querySelectorAll('script, noscript, lenspub-zapper, iframe').forEach((e) => e.remove());
+        for (const e of [doc, ...doc.querySelectorAll('*')]) {
+          for (const a of [...e.attributes]) if (a.name.startsWith('data-lpz-') || /^on/i.test(a.name)) e.removeAttribute(a.name);
+        }
+        doc.classList.remove('lpz-before');
+        const head = doc.querySelector('head');
+        head.querySelectorAll('base').forEach((b) => b.remove());
+        const b = document.createElement('base');
+        b.setAttribute('href', base);
+        head.prepend(b);
+        return '<!doctype html>\n' + doc.outerHTML;
+      }, url);
+      writeFileSync(join(dataDir, 'snapshots', `${slug}.html`), html);
+    }
     const raw = await page.evaluate(() => {
       // Show the page as published, so hidden blocks have a real position.
       document.documentElement.classList.add('lpz-before');
@@ -136,7 +181,6 @@ for (const url of targets) {
         if (n > 1) key = `${key}-${n}`;
         return { key, ...b };
       });
-    const slug = slugFor(url);
     const out = {
       url,
       host: new URL(url).hostname,
@@ -144,9 +188,19 @@ for (const url of targets) {
       splitter: `lenszap@${version}`,
       blocks
     };
-    writeFileSync(join(dataDir, 'pages', `${slug}.json`), JSON.stringify(out, null, 2) + '\n');
+    const pagePath = join(dataDir, 'pages', `${slug}.json`);
+    const labelPath = join(dataDir, 'labels', `${slug}.json`);
+    let carried = '';
+    if (existsSync(pagePath) && existsSync(labelPath)) {
+      const before = JSON.parse(readFileSync(pagePath, 'utf8'));
+      const old = JSON.parse(readFileSync(labelPath, 'utf8'));
+      const c = carryLabels(before.blocks, old.labels ?? {}, blocks);
+      writeFileSync(labelPath, JSON.stringify({ ...old, labels: { ...old.labels, ...c.labels } }, null, 2) + '\n');
+      carried = `  (labels: ${c.kept} kept, ${c.inherited} inherited, ${c.unlabelled} to label)`;
+    }
+    writeFileSync(pagePath, JSON.stringify(out, null, 2) + '\n');
     if (args.shots) await page.screenshot({ path: join(dataDir, 'shots', `${slug}.jpg`), quality: 70, fullPage: true });
-    console.log(`${String(blocks.length).padStart(4)} blocks  ${slug}`);
+    console.log(`${String(blocks.length).padStart(4)} blocks  ${slug}${carried}`);
   } catch (err) {
     failed++;
     console.error(`  failed  ${url}: ${err.message.split('\n')[0]}`);

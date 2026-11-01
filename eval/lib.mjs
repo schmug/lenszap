@@ -92,3 +92,28 @@ export function readLens(path) {
   }
   return readJson(path);
 }
+
+/**
+ * Carry labels from an earlier capture of a page to a new split of the same
+ * page. A block whose text is unchanged keeps its label (same key). A new
+ * block whose text lies inside one old labelled block inherits that label,
+ * unless the old block was labelled mixed (its parts need their own labels).
+ * Everything else is left for you to label.
+ *
+ * @returns {{labels: Record<string,string>, kept: number, inherited: number, unlabelled: number}}
+ */
+export function carryLabels(oldBlocks, oldLabels, newBlocks) {
+  const labelled = oldBlocks
+    .filter((b) => oldLabels[b.key] && oldLabels[b.key] !== 'mixed')
+    .map((b) => ({ text: norm(b.text), label: oldLabels[b.key] }));
+  const labels = {};
+  let kept = 0, inherited = 0, unlabelled = 0;
+  for (const b of newBlocks) {
+    if (oldLabels[b.key]) { labels[b.key] = oldLabels[b.key]; kept++; continue; }
+    const t = norm(b.text);
+    const from = t && labelled.filter((o) => o.text.includes(t));
+    const kinds = new Set((from || []).map((o) => o.label));
+    if (kinds.size === 1) { labels[b.key] = [...kinds][0]; inherited++; } else unlabelled++;
+  }
+  return { labels, kept, inherited, unlabelled };
+}

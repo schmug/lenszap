@@ -62,3 +62,45 @@ export function scoringOrder(items, viewportHeight) {
     .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1])
     .map((x) => x.id);
 }
+
+/** Shortest text for a block, and for a headline inside a list of stories. */
+export const MIN_CHARS = 40;
+export const MIN_HEADLINE_CHARS = 20;
+/** Longest container kept as one block. */
+export const MAX_CONTAINER_CHARS = 1200;
+/** A link at least this long reads as a story headline, not a tag or a control. */
+export const STORY_LINK_CHARS = 25;
+
+/**
+ * Decide what the walk does with one element, from numbers the content script
+ * measures:
+ *   'skip'  - not a block and not walked into (too short, or a line of links
+ *             such as tags, categories, tabs, or a pager: page chrome, never zapped);
+ *   'block' - one block;
+ *   'split' - walk into its children.
+ *
+ * @param {{chars: number, leafy: boolean, containerish: boolean,
+ *   headings: number, storyLinks: number, links: number, linkChars: number,
+ *   letters: number, linkLetters: number,
+ *   severalChildren: boolean, hasControls: boolean, inStories?: boolean, hasLink?: boolean}} m
+ *   headings: h2–h6 inside; storyLinks: distinct links of STORY_LINK_CHARS or more;
+ *   links, linkChars: all links and their text length; letters, linkLetters:
+ *   letters (not digits or punctuation) in the text and in its links; severalChildren: two or
+ *   more children of MIN_CHARS or more; hasControls: holds an input, a form with
+ *   one, a dialog, nav, h1, or an existing block; inStories: inside a container
+ *   that was split because it holds several stories.
+ */
+export function splitDecision(m) {
+  const min = m.inStories && m.hasLink ? MIN_HEADLINE_CHARS : MIN_CHARS;
+  if (m.chars < min) return 'skip';
+  // Mostly short links: tags, categories, tabs, a pager.
+  if (m.links >= 3 && m.linkLetters >= 0.7 * m.letters && m.linkChars / m.links < 20) return 'skip';
+  if (m.hasControls) return 'split';
+  if (m.leafy) return 'block';
+  if (!m.containerish || m.chars > MAX_CONTAINER_CHARS) return 'split';
+  // One titled item (a repo card, a story teaser) stays whole, whatever its parts.
+  if (m.headings === 1 && m.storyLinks <= 1) return 'block';
+  // Several headlines: a feed, a "Most read" list, a multi-story card.
+  if (m.headings >= 2 || m.storyLinks >= 2) return 'split';
+  return m.severalChildren ? 'split' : 'block';
+}
