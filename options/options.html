@@ -41,7 +41,7 @@
         </label>
         <label>Endpoint <input id="endpoint" type="url" placeholder="http://127.0.0.1:8080"></label>
         <label>Model <input id="model" type="text" placeholder="optional for llama-server; e.g. qwen3:4b for Ollama"></label>
-        <p class="muted">Only addresses on this machine (localhost, 127.0.0.1) are accepted, so page text never leaves your device. Decision models (recommended) run in llama.cpp's <code>llama-server</code>, for example <code>llama-server -hf ggml-org/Clef-Flash-GGUF:Q4_K_M --port 8080</code>; leave Model empty unless the server hosts several. Ollama cannot serve decision models; for a chat model in Ollama, start it with <code>OLLAMA_ORIGINS=chrome-extension://*</code>.</p>
+        <p class="muted">Only addresses on this machine (localhost, 127.0.0.1) are accepted, so page text never leaves your device. Decision models (recommended) run in llama.cpp's <code>llama-server</code>, for example <code>llama-server -hf ggml-org/Kev-4B-GGUF --port 8080</code> (Clef-flash needs a llama.cpp build with its draft support; see the README); leave Model empty unless the server hosts several. Ollama cannot serve decision models; for a chat model in Ollama, start it with <code>OLLAMA_ORIGINS=chrome-extension://*</code>.</p>
         <div class="row"><button id="save-model">Save</button><button id="test-model">Test connection</button></div>
       </div>
       <p id="scorer-status" role="status"></p>

@@ -40,27 +40,38 @@ Zapping is a style change only. Nodes are never removed or rewritten, so **Befor
 
 Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/systemone`. **Ollama and LM Studio can't serve them**: a chat runner loads only the backbone and produces noise.
 
-1. **Install a recent llama.cpp.** Use `brew install llama.cpp` on macOS, `winget install llama.cpp` on Windows, or a release build on Linux. You need a build from October 2026 or later with decision-model support; the community Clef-flash quantizations were made with release b11430. Check with `llama-server --version`.
-2. **Start a model.** Pick one from the table below. Each command downloads the model on first run.
+1. **Install a recent llama.cpp.** Use `brew install llama.cpp` (or `brew upgrade llama.cpp`) on macOS, `winget install llama.cpp` on Windows, or a release build on Linux. Decision-model support (`/v1/systemone`) arrived in October 2026. Check your build with `llama-server --version`.
+2. **Start a model in its own terminal.** `llama-server` keeps running in the foreground, so run the benchmark from a second terminal. Each command downloads its model on first run. If port 8080 is taken, use any other port and pass the same one to the zapper.
 
    ```
-   llama-server -hf ggml-org/Clef-Flash-GGUF:Q4_K_M --port 8080 --parallel 4
+   llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4
    ```
 
    If long passages fail with a "too large to process" error, add `-ub 2048`.
+
+   **Clef-flash isn't in released llama.cpp yet.** As of 2026-11-01 its support is an unmerged draft ([llama.cpp PR #29831](https://github.com/ggml-org/llama.cpp/pull/29831)), so release builds fail with `unknown model architecture: 'clef'`. To try it now, build that PR yourself. The PR handles one sequence per batch, so use `--parallel 1` and `--concurrency 1`:
+
+   ```
+   git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+   git fetch origin pull/29831/head:clef && git checkout clef
+   cmake -B build && cmake --build build --config Release -j
+   ./build/bin/llama-server -hf ggml-org/Clef-Flash-GGUF:Q4_K_M --port 8080 --parallel 1
+   ```
+
 3. **Point the zapper at it.** In the extension's settings, choose **A model running on this machine**, then the **Decision model via llama-server** API, with endpoint `http://127.0.0.1:8080`. Leave Model empty. Press **Test connection**.
 4. **Measure it on your machine.** This scores 28 hand-labelled passages and reports latency and wrong-zap rates at each threshold, next to the word-only baseline:
 
    ```
    npm run zapper:bench                                  # default: decision model at 127.0.0.1:8080
+   npm run zapper:bench -- --endpoint http://127.0.0.1:8181   # a different port
    npm run zapper:bench -- --concurrency 4               # match --parallel
    npm run zapper:bench -- --api ollama --model qwen3:4b # a chat model in Ollama, for comparison
    ```
 
 | Model | Size | Notes |
 |---|---|---|
-| `ggml-org/Clef-Flash-GGUF:Q4_K_M` | 9B; about a 6 GB download | Cloudflare's model and the best fit on paper. It wants a GPU or Apple-silicon unified memory with roughly 8 GB free; it will run on a CPU, but slowly. Apache-2.0. |
-| `ggml-org/Kev-4B-GGUF` | 4B | Smaller and faster. Apache-2.0. |
+| `ggml-org/Kev-4B-GGUF` | 4B | Works in released llama.cpp. The place to start. Apache-2.0. |
+| `ggml-org/Clef-Flash-GGUF:Q4_K_M` | 9B; about a 6 GB download | Cloudflare's model and the best fit on paper, but it **needs the draft-PR build above**. It wants a GPU or Apple-silicon unified memory with roughly 8 GB free. Apache-2.0. |
 | `ggml-org/Julia-1-GGUF` | 144M | Tiny and multilingual, and fine on a laptop CPU. Expect weaker judgments; the benchmark will tell you how much. Apache-2.0. |
 
 The sizes and licenses come from the model publishers and llama.cpp's announcement. **None of these models has been run with this code yet**: the cloud environment this was built in can't download models. The extension's model path, and the benchmark, were tested only against a stand-in server with canned answers. Your first benchmark run is the first real measurement.

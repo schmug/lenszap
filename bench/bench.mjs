@@ -83,7 +83,7 @@ if (api !== 'lexical') {
     await scoreWithEndpoint(settings, blocks.slice(0, 1), topics, fetch);
   } catch (err) {
     console.error(`Could not reach ${settings.endpoint} (${api}): ${err.message}`);
-    console.error('Is the server running? For a decision model: llama-server -hf ggml-org/Clef-Flash-GGUF:Q4_K_M --port 8080');
+    console.error('Is the server running, on that port? For a decision model: llama-server -hf ggml-org/Kev-4B-GGUF --port 8080');
     process.exit(1);
   }
   const timings = [];
