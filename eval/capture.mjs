@@ -114,7 +114,15 @@ let failed = 0;
 for (const url of targets) {
   const page = await context.newPage();
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // Errors from the extension's own scripts, so a splitter failure shows up here.
+    page.on('console', (m) => {
+      if (m.type() === 'error' && /^chrome-extension:/.test(m.location()?.url ?? '')) console.error(`  extension error on ${url}: ${m.text()}`);
+    });
+    page.on('pageerror', (e) => { if (/chrome-extension:/.test(e.stack ?? '')) console.error(`  extension error on ${url}: ${e.message}`); });
+    // Wait for the response, then give the document a while; a slow ad or
+    // tracker script should not fail the capture.
+    await page.goto(url, { waitUntil: 'commit', timeout: 45000 });
+    await page.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => console.error(`  slow: ${url} had not finished loading after 30 s; capturing anyway`));
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
     // Scroll through once so lazy-loaded content arrives, then back to the top.
     await page.evaluate(async () => {
@@ -188,6 +196,10 @@ for (const url of targets) {
       splitter: `lenszap@${version}`,
       blocks
     };
+    if (blocks.length === 0) {
+      const diag = await page.evaluate(() => ({ marked: document.querySelectorAll('[data-lpz-id]').length, layer: !!document.querySelector('lenspub-zapper'), chars: document.body?.innerText.length ?? 0 }));
+      throw new Error(`no blocks (extension layer ${diag.layer ? 'present' : 'missing: the content script did not run or failed'}, ${diag.chars} characters of visible text); the earlier capture is kept`);
+    }
     const pagePath = join(dataDir, 'pages', `${slug}.json`);
     const labelPath = join(dataDir, 'labels', `${slug}.json`);
     let carried = '';
