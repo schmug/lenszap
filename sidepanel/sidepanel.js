@@ -13,7 +13,7 @@
 
 import { isLoopbackEndpoint } from '../core/model-scorer.js';
 import { suggest, MIN_EXAMPLES } from '../core/train.js';
-import { lensChanges, validateLens, bumpVersion } from '../core/lens-edit.js';
+import { lensChanges, validateLens, bumpVersion, withToolFields } from '../core/lens-edit.js';
 
 const $ = (id) => document.getElementById(id);
 const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
@@ -408,7 +408,7 @@ function renderLens(message, kind = 'ok') {
 
   const refreshSummary = () => {
     const changes = lensChanges(state.lens, lensDraft);
-    const errors = validateLens({ ...lensDraft, versionHistory: state.lens.versionHistory, metadata: { ...lensDraft.metadata, lensVersion: state.lens.metadata.lensVersion } });
+    const errors = validateLens(withToolFields(state.lens, lensDraft));
     const impact = changes.some((c) => c.impact === 'major') ? 'major' : changes.some((c) => c.impact === 'minor') ? 'minor' : 'trivial';
     summary.replaceChildren(changes.length
       ? h('div', {},

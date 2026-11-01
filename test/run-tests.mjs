@@ -25,6 +25,7 @@ import {
   commitDraft,
   commitEdit,
   lensChanges,
+  withToolFields,
   validateLens,
   unsupportedFeatures
 } from '../core/lens-edit.js';
@@ -472,6 +473,18 @@ await test('commitEdit: a direct edit becomes one valid version; version fields 
   bad.interpretation.priorities[0].weight = 3;
   await assert.rejects(commitEdit(sampleLens, bad, { sha256 }), /would not validate/);
   await assert.rejects(commitEdit(sampleLens, [], { sha256 }), /JSON object/);
+});
+
+await test('withToolFields: an edit of a lens with no version history validates as it will be saved', () => {
+  assert.equal(sampleLens.versionHistory, undefined, 'the sample lens starts without one');
+  const edit = structuredClone(sampleLens);
+  edit.interpretation.priorities.push({ topic: 'open data', weight: 0.4 });
+  const candidate = withToolFields(sampleLens, edit);
+  assert.ok(!('versionHistory' in candidate), 'no versionHistory key, not an undefined one');
+  assert.deepEqual(validateLens(candidate), []);
+  edit.versionHistory = 'junk';
+  edit.metadata.lensVersion = '9.9.9';
+  assert.deepEqual(validateLens(withToolFields(sampleLens, edit)), [], 'the tool\'s fields override the edit');
 });
 
 await test('train: needs a few examples before suggesting', () => {
