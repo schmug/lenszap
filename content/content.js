@@ -198,7 +198,17 @@
 
   const queue = []; // ids waiting for the model
   const active = new Set(); // ids being scored right now
-  const progress = { done: 0, total: 0 };
+  // Blocks within this many screens below the visible area (half that above)
+  // are scored now; the rest wait until the reader scrolls near them.
+  const AHEAD_SCREENS = 1.5;
+  const near = new Set(); // queued ids close enough to score now
+  const progress = { done: 0 };
+  // total: blocks answered, being answered, and waiting near the screen. Blocks
+  // further down are not counted, so the bar finishes when what you can reach is done.
+  const progressNow = () => {
+    const nearQueued = queue.filter((id) => near.has(id)).length;
+    return { done: progress.done, total: progress.done + active.size + nearQueued, later: queue.length - nearQueued };
+  };
   let inFlight = 0;
   let generation = 0; // bumped to drop answers from a superseded run
 
@@ -215,6 +225,20 @@
       return { id, top: r.top, bottom: r.bottom };
     });
     queue.splice(0, queue.length, ...scoringOrder(items, innerHeight));
+    near.clear();
+    for (const it of items) {
+      if (it.top < innerHeight * (1 + AHEAD_SCREENS) && it.bottom > -innerHeight * (AHEAD_SCREENS / 2)) near.add(it.id);
+    }
+  }
+
+  /** Take up to n queued ids that are near the screen, in scoring order. */
+  function takeNear(n) {
+    const out = [];
+    for (let i = 0; i < queue.length && out.length < n; ) {
+      if (near.has(queue[i])) out.push(...queue.splice(i, 1));
+      else i++;
+    }
+    return out;
   }
 
   function enqueue(ids) {
@@ -226,16 +250,29 @@
       return;
     }
     queue.push(...ids);
-    progress.total += ids.length;
     sortQueue();
-    pump();
+    // Blocks scored before (on this page or another, since the browser
+    // started) come back from the cache at once, wherever they are on the page.
+    const gen = generation;
+    send('cached-scores', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
+      .then((res) => {
+        if (gen !== generation || !res?.scores?.length) return;
+        scorerId = res.scorer;
+        const hit = new Set();
+        for (const s of res.scores) if (blocks.has(s.id)) { scores.set(s.id, s); hit.add(s.id); }
+        for (let i = queue.length - 1; i >= 0; i--) if (hit.has(queue[i])) queue.splice(i, 1);
+        apply();
+      })
+      .catch(() => {})
+      .finally(() => { if (gen === generation) pump(); });
   }
 
   function stopScoring() {
     queue.length = 0;
     active.clear();
     drawSparks();
-    progress.done = progress.total = 0;
+    near.clear();
+    progress.done = 0;
   }
 
   function pump() {
@@ -245,7 +282,9 @@
     // A decision model answers one block per request; a chat model takes a few.
     const per = m.api === 'systemone' ? 1 : 6;
     while (!modelError && inFlight < limit && queue.length) {
-      const ids = queue.splice(0, per).filter((id) => blocks.has(id));
+      const taken = takeNear(per);
+      if (taken.length === 0) break; // the rest wait until the reader scrolls near them
+      const ids = taken.filter((id) => blocks.has(id));
       if (ids.length === 0) continue;
       inFlight++;
       ids.forEach((id) => active.add(id));
@@ -277,7 +316,7 @@
           ids.forEach((id) => active.delete(id));
           drawSparks();
           progress.done += ids.length;
-          if (!queue.length && !inFlight) progress.done = progress.total = 0;
+          if (!inFlight && progressNow().total === progress.done) progress.done = 0;
           apply();
           pump();
         });
@@ -376,7 +415,7 @@
       host,
       blocks: blocks.size,
       scorer: scorerId,
-      progress: { ...progress },
+      progress: progressNow(),
       modelError,
       ledgerFailure: !!ledgerFailure,
       paused: paused(),
@@ -444,7 +483,7 @@
       },
       site: { rule: rule?.name ?? null, paused: paused() },
       lens: { id: state.lens.id, version: state.lens.metadata?.lensVersion, priorities: priorities() },
-      progress: { ...progress, queued: queue.length, inFlight },
+      progress: { ...progressNow(), queued: queue.length, inFlight },
       modelError,
       ledgerFailure: ledgerFailure ?? null,
       requests: {
@@ -728,8 +767,9 @@
   let sortTimer = null;
   addEventListener('scroll', () => {
     if (!queue.length || sortTimer) return;
-    sortTimer = setTimeout(() => { sortTimer = null; sortQueue(); }, 300);
+    sortTimer = setTimeout(() => { sortTimer = null; sortQueue(); pump(); }, 300);
   }, { passive: true });
+  addEventListener('resize', () => { if (queue.length) { sortQueue(); pump(); } }, { passive: true });
 
   // --- Run, and keep up with the page -------------------------------------------
 

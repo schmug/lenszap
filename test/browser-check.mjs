@@ -401,6 +401,9 @@ await new Promise((r) => modelServer.once('listening', r));
 const modelEndpoint = `http://127.0.0.1:${modelServer.address().port}`;
 
 for (const api of ['systemone', 'openai', 'ollama']) {
+  // Leave the page first, so the old page does not start rescoring with the
+  // new settings while the new one loads (two pages would share the limit).
+  await page.goto('about:blank');
   await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
     threshold: 0.8,
     scorer: 'model',
@@ -408,7 +411,7 @@ for (const api of ['systemone', 'openai', 'ollama']) {
   });
   modelCalls = 0;
   maxInFlight = 0;
-  await page.reload();
+  await page.goto(pageUrl);
   if (api === 'systemone') {
     // While the model works, a spark races round each block being scored.
     let spark = null;
@@ -434,6 +437,40 @@ for (const api of ['systemone', 'openai', 'ollama']) {
   console.log(`model scorer (${api}): hidden ${(await zappedTexts()).length}, ${modelCalls} request(s), at most ${maxInFlight} at once`);
 }
 if (shots) await page.screenshot({ path: join(shots, 'model-scorer.jpg'), quality: 80 });
+
+// The score cache outlives the service worker in chrome.storage.session
+// (memory only), and holds scores only: no page text, no addresses.
+const sessionCache = await worker.evaluate(() => chrome.storage.session.get('scoreCache'));
+assert.ok(Array.isArray(sessionCache.scoreCache) && sessionCache.scoreCache.length > 0, 'score cache kept in session storage');
+const cacheJson = JSON.stringify(sessionCache.scoreCache);
+assert.ok(!/Riverside|weather service|127\.0\.0\.1/.test(cacheJson), 'score cache holds no page text or addresses');
+assert.equal(JSON.stringify(await worker.evaluate(() => chrome.storage.local.get(null))).includes('scoreCache'), false, 'score cache never in local storage');
+// Back on a page already scored: answered from the cache, no model requests.
+modelCalls = 0;
+await page.goto('about:blank');
+await page.goto(pageUrl);
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
+await settle();
+assert.equal(modelCalls, 1, `revisit: only the block the model never answered is asked again (saw ${modelCalls})`);
+
+// --- Speed: a model scores only blocks near the screen, and more as you scroll ---
+const longPage = '<!doctype html><meta charset="utf-8"><title>Long page (fictional)</title><body>' +
+  Array.from({ length: 40 }, (_, i) => `<p style="margin:0 0 600px">Paragraph ${i + 1} of a long fictional page about the valley weather service and its rain gauges, item ${i + 1}.</p>`).join('') +
+  '</body>';
+await context.route('https://long.example/**', (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: longPage }));
+await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
+  threshold: 0.8, scorer: 'model', model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 }
+});
+modelCalls = 0;
+await page.goto('https://long.example/');
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
+await settle();
+const longAtTop = modelCalls;
+assert.ok(longAtTop > 0 && longAtTop < 12, `long page: only blocks near the screen are scored at first (${longAtTop} of 40)`);
+await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
+await page.waitForFunction(() => document.querySelector('p:last-of-type')?.hasAttribute('data-lpz-zapped'), null, { timeout: 15000 });
+assert.ok(modelCalls > longAtTop && modelCalls < 40, `long page: scrolling to the end scores what is near it (${modelCalls} of 40)`);
+console.log(`long page: ${longAtTop} of 40 blocks scored at the top, ${modelCalls} after jumping to the end`);
 
 await context.close();
 server.close();

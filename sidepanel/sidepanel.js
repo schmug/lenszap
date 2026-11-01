@@ -107,10 +107,12 @@ function renderHeader() {
   else if (page.paused) {
     count.textContent = `Paused · ${page.wouldZap.length} would be hidden`;
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
+    if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
   }
   else {
     count.append(h('strong', { text: String(page.zapped.length) }), ` hidden of ${page.blocks}`);
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
+    if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
   }
   const bar = $('progress');
   bar.hidden = !page?.progress.total;

@@ -53,10 +53,32 @@ async function load() {
 const sha256 = (bytes) => crypto.subtle.digest('SHA-256', bytes);
 const TRAINING_LIMIT = 500;
 
-// Model scores cached for the life of the service worker, keyed by model,
-// topics, and block text. Never persisted: the cache holds page text.
+// Model scores, keyed by a hash of model, topics, and block text, so an
+// unchanged block is never sent to the model twice. Kept in
+// chrome.storage.session: it outlives this service worker (which Chrome stops
+// after about 30 seconds idle) but lives in memory only and is gone when the
+// browser closes. Never written to disk, not even as hashes: a saved list of
+// block hashes would be a record of what was read. Values are scores only.
 const scoreCache = new Map();
 const CACHE_LIMIT = 4000;
+const CACHE_KEY = 'scoreCache';
+let cacheLoaded = null;
+let cacheSaveTimer = null;
+function loadCache() {
+  cacheLoaded ??= (async () => {
+    try {
+      const { [CACHE_KEY]: saved } = (await chrome.storage.session?.get(CACHE_KEY)) ?? {};
+      if (Array.isArray(saved)) for (const [k, v] of saved) if (!scoreCache.has(k)) scoreCache.set(k, v);
+    } catch {}
+  })();
+  return cacheLoaded;
+}
+function saveCacheSoon() {
+  clearTimeout(cacheSaveTimer);
+  cacheSaveTimer = setTimeout(() => {
+    chrome.storage.session?.set({ [CACHE_KEY]: [...scoreCache] }).catch(() => {});
+  }, 500);
+}
 
 function cacheKey(settings, topics, text) {
   let h = 0x811c9dc5;
@@ -79,6 +101,7 @@ function noteError(m, err, ms, blocks) {
 async function scoreWithModel(blocks, topics) {
   const { settings } = await load();
   const m = settings.model;
+  await loadCache();
   const results = new Map();
   const todo = [];
   for (const b of blocks) {
@@ -98,9 +121,11 @@ async function scoreWithModel(blocks, topics) {
     results.set(r.id, r);
     if (!r.unscored) {
       if (scoreCache.size >= CACHE_LIMIT) scoreCache.delete(scoreCache.keys().next().value);
-      scoreCache.set(cacheKey(m, topics, todo[i].text), r);
+      const { id, ...score } = r;
+      scoreCache.set(cacheKey(m, topics, todo[i].text), score);
     }
   });
+  if (fresh.length) saveCacheSoon();
   return { scores: blocks.map((b) => results.get(b.id)), scorer: modelScorerId(m) };
 }
 
@@ -213,10 +238,25 @@ const handlers = {
   async 'clear-local-state'() {
     await chrome.storage.local.remove(['draftWeights', 'sites', 'training']);
     scoreCache.clear();
+    clearTimeout(cacheSaveTimer);
+    await chrome.storage.session?.remove(CACHE_KEY);
     return { ok: true };
   },
 
+  // Scores already cached for these blocks; blocks not in the cache are left out.
+  async 'cached-scores'({ blocks, topics }) {
+    await loadCache();
+    const { settings } = await load();
+    const scores = [];
+    for (const b of blocks) {
+      const hit = scoreCache.get(cacheKey(settings.model, topics, b.text));
+      if (hit) scores.push({ ...hit, id: b.id });
+    }
+    return { scores, scorer: modelScorerId(settings.model) };
+  },
+
   async 'debug-info'() {
+    await loadCache();
     return { recentErrors: [...recentErrors], cachedScores: scoreCache.size };
   },
 
