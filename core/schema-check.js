@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Copied unchanged from poc/engine/schema-check.js; zapper/test asserts the two
+// Copied unchanged from LensPub's poc/engine/schema-check.js (upstream/); test/ asserts the two
 // stay identical below this header. Comments below speak of "the extension",
 // meaning the reference engine; the same reasoning applies to the zapper.
 //

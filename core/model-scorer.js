@@ -22,7 +22,7 @@
 // the surveillance ADR-0005 exists to prevent.
 //
 // This module only builds requests and parses responses; the fetch happens in
-// background/service-worker.js and zapper/bench/bench.mjs. Pure and DOM-free.
+// background/service-worker.js and bench/bench.mjs. Pure and DOM-free.
 
 import { looksLikeEvidence } from './lexical-scorer.js';
 

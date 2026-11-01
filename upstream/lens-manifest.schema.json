@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lenspub.org/ns/schemas/lens-manifest.schema.json",
+  "title": "Lens Manifest",
+  "description": "The primary exchange object of LensPub: a portable, declarative, model-agnostic policy document expressing a user's interpretation intent (ADR-0001). This is the history-free shareable core (ADR-0006): it MUST NOT contain URLs visited, content excerpts, reading timestamps, feedback records, or any field from which reading history can be reconstructed. Media type: application/lens-manifest+json (provisional).",
+  "type": "object",
+  "required": ["lenspub", "type", "metadata", "interpretation", "adaptation"],
+  "additionalProperties": false,
+  "properties": {
+    "lenspub": {
+      "description": "LensPub protocol version this manifest conforms to.",
+      "type": "string",
+      "const": "0.1"
+    },
+    "type": {
+      "type": "string",
+      "const": "LensManifest"
+    },
+    "id": {
+      "description": "Stable identifier for this lens: an HTTPS URL or a DID. Hosting is abstract in v1; Solid pod URLs are one valid profile. OPTIONAL for purely local lenses; REQUIRED for published lenses.",
+      "type": "string",
+      "format": "uri"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "lensVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string" },
+        "lensVersion": {
+          "description": "Semantic version of this manifest. Every accepted Lens Change Proposal increments it.",
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "created": { "type": "string", "format": "date-time" },
+        "modified": { "type": "string", "format": "date-time" },
+        "publisher": {
+          "description": "Identity of the publisher for published lenses (ADR-0003).",
+          "type": "object",
+          "required": ["id"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "description": "DID of the Lens Publisher.", "type": "string", "pattern": "^did:" },
+            "name": { "type": "string" },
+            "kind": { "type": "string", "enum": ["individual", "expert", "organization", "partner", "collaborative"] }
+          }
+        },
+        "lineage": {
+          "description": "Where this lens came from, if forked or copied. Never includes reading history.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "forkOf": { "type": "string", "format": "uri" },
+            "forkOfVersion": { "type": "string" }
+          }
+        },
+        "language": { "description": "BCP 47 language tag for the manifest's human-readable fields.", "type": "string" }
+      }
+    },
+    "domains": {
+      "description": "Domain Scopes declared by this lens. Classification of content into scopes is an engine responsibility and MUST be explainable.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "description": "Scope identifier, unique within this manifest.", "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "label": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "interpretation": {
+      "description": "The declarative interpretation policy: what to prioritize, whom to trust, and how to present overlays.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "priorities": {
+          "description": "Topics or qualities to emphasize (positive weight) or de-emphasize (negative weight). Never a content filter: de-emphasis affects overlay prominence, not content visibility.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["topic", "weight"],
+            "additionalProperties": false,
+            "properties": {
+              "topic": { "type": "string" },
+              "weight": { "type": "number", "minimum": -1, "maximum": 1 },
+              "domains": { "description": "Restrict this priority to specific Domain Scope ids.", "type": "array", "items": { "type": "string" } },
+              "rationale": { "description": "User-authored reason; carried into reasoning traces.", "type": "string" }
+            }
+          }
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "trusted": { "$ref": "#/$defs/sourceList" },
+            "distrusted": { "$ref": "#/$defs/sourceList" },
+            "requireProvenance": {
+              "description": "Provenance signals the user wants surfaced when absent (e.g. c2pa, citations, author-identity). Surfacing, not blocking (ADR-0007).",
+              "type": "array",
+              "items": { "type": "string", "enum": ["c2pa", "citations", "author-identity", "publication-date", "corroboration"] }
+            }
+          }
+        },
+        "presentation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "annotations": { "type": "boolean", "default": true },
+            "summaries": { "type": "string", "enum": ["none", "brief", "detailed"], "default": "brief" },
+            "evidenceIndicators": { "type": "boolean", "default": true },
+            "counterpoints": { "type": "string", "enum": ["off", "on-request", "auto"], "default": "on-request" },
+            "primarySourceExpansion": { "type": "boolean", "default": true },
+            "explanationDisplay": {
+              "description": "Whether reasoning traces render inline or on demand. Traces always exist; this controls display only.",
+              "type": "string",
+              "enum": ["always", "on-request"],
+              "default": "on-request"
+            }
+          }
+        }
+      }
+    },
+    "adaptation": {
+      "description": "How readily this lens may evolve (ADR-0010). Learning is never silent.",
+      "type": "object",
+      "required": ["defaultPolicy"],
+      "additionalProperties": false,
+      "properties": {
+        "defaultPolicy": { "$ref": "#/$defs/policyName" },
+        "parameters": { "$ref": "#/$defs/policyParameters" },
+        "domainPolicies": {
+          "description": "Per-domain overrides. Per-domain settings take precedence over the lens-wide default.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["domain", "policy"],
+            "additionalProperties": false,
+            "properties": {
+              "domain": { "description": "A Domain Scope id declared in this manifest.", "type": "string" },
+              "policy": { "$ref": "#/$defs/policyName" },
+              "parameters": { "$ref": "#/$defs/policyParameters" }
+            }
+          }
+        }
+      }
+    },
+    "privacy": {
+      "description": "Declarative privacy policy (ADR-0005). Local-only inference is the default; remote inference is per-domain opt-in. Provider credentials and endpoints are device-local configuration, never manifest content.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "remoteInference": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowed": { "type": "boolean", "default": false },
+            "domains": { "description": "Domain Scope ids for which remote inference is permitted. Empty or absent with allowed=true means no scopes are opted in.", "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "subscriptions": {
+      "description": "Published lenses this lens composes as inputs. Composition semantics are defined in the Lens Engine specification; the user's own settings always take precedence.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lens"],
+        "additionalProperties": false,
+        "properties": {
+          "lens": { "description": "URL or DID of the subscribed Published Lens.", "type": "string", "format": "uri" },
+          "pinnedVersion": { "description": "Semantic version pin. Absent means track latest, with updates surfaced as proposals.", "type": "string" },
+          "domains": { "description": "Restrict this subscription's influence to specific Domain Scope ids.", "type": "array", "items": { "type": "string" } },
+          "trust": { "type": "string", "enum": ["advisory", "adopted"], "default": "advisory" }
+        }
+      }
+    },
+    "versionHistory": {
+      "description": "Lineage of manifest versions: version identifiers, hashes, and proposal references only. Never reading history.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lensVersion", "hash"],
+        "additionalProperties": false,
+        "properties": {
+          "lensVersion": { "type": "string" },
+          "hash": { "description": "Content hash of that manifest version (multibase or hex, sha-256 recommended).", "type": "string" },
+          "date": { "type": "string", "format": "date-time" },
+          "proposalId": { "description": "Identifier of the accepted Lens Change Proposal that produced this version.", "type": "string" }
+        }
+      }
+    },
+    "proof": {
+      "description": "W3C Verifiable Credential Data Integrity proof for Signed Manifests (ADR-0003). Structure per https://www.w3.org/TR/vc-data-integrity/.",
+      "type": "object"
+    },
+    "extensions": {
+      "description": "Extension point. Implementations MUST ignore extensions they do not understand and MUST NOT place history-derived data here.",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "sourceList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["origin"],
+        "additionalProperties": false,
+        "properties": {
+          "origin": { "description": "An origin (https://example.com), registrable domain (example.com), or DID of a publisher.", "type": "string" },
+          "weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
+          "note": { "description": "User-authored reason; carried into reasoning traces.", "type": "string" }
+        }
+      }
+    },
+    "policyName": {
+      "type": "string",
+      "enum": ["locked", "conservative", "balanced", "adaptive", "explorer", "custom"]
+    },
+    "policyParameters": {
+      "description": "Explicit adaptation parameters (ADR-0010). Required when policy is 'custom'; otherwise overrides the preset.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "proposalFrequency": {
+          "description": "Maximum Lens Change Proposals the engine may raise per week per domain scope. 0 = never (Locked).",
+          "type": "number",
+          "minimum": 0
+        },
+        "evidenceThreshold": {
+          "description": "Minimum count of explicit feedback events supporting a change before a proposal may be raised.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "autoAcceptCeiling": {
+          "description": "Highest proposal impact class that may be auto-accepted (always notified, always rollback-able). 'none' means every proposal requires explicit review.",
+          "type": "string",
+          "enum": ["none", "trivial", "minor"]
+        }
+      }
+    }
+  }
+}

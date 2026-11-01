@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Copy of poc/engine/lens-manifest.schema.js, itself a verbatim copy of
-// ../../schemas/lens-manifest.schema.json. The zapper is a separate extension
-// and cannot import from poc/, so it carries its own copy; zapper/test asserts
-// it is structurally identical to the canonical schema. Never edit it alone.
+// Copy of LensPub's schemas/lens-manifest.schema.json, as a module. LensZap is
+// a separate extension and carries its own copy; test/ asserts it is
+// structurally identical to upstream/lens-manifest.schema.json, the file from
+// the pinned LensPub commit. Never edit it alone.
 
 export const LENS_MANIFEST_SCHEMA = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",

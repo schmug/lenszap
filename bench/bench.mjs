@@ -12,10 +12,10 @@
 // always run alongside as a baseline.
 //
 // Usage:
-//   node zapper/bench/bench.mjs                                   # llama-server decision model at 127.0.0.1:8080
-//   node zapper/bench/bench.mjs --endpoint http://127.0.0.1:8081 --concurrency 2
-//   node zapper/bench/bench.mjs --api ollama --endpoint http://localhost:11434 --model qwen3:4b
-//   node zapper/bench/bench.mjs --api lexical                     # baseline only, no server needed
+//   node bench/bench.mjs                                   # llama-server decision model at 127.0.0.1:8080
+//   node bench/bench.mjs --endpoint http://127.0.0.1:8081 --concurrency 2
+//   node bench/bench.mjs --api ollama --endpoint http://localhost:11434 --model qwen3:4b
+//   node bench/bench.mjs --api lexical                     # baseline only, no server needed
 //
 // Options: --api systemone|ollama|openai|lexical  --endpoint URL  --model NAME
 //          --concurrency N (decision models; default 1, which measures per-block latency

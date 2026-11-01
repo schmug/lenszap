@@ -1,7 +1,18 @@
 {
-  "name": "lenspub-zapper",
+  "name": "lenszap",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Marks zapper/ as ES modules for Node. The extension itself has no build step and no runtime dependencies.",
-  "license": "Apache-2.0"
+  "description": "A Chromium extension that hides page blocks off your LensPub lens, with a local decision model. Built on LensPub; not a LensPub engine.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "node test/run-tests.mjs",
+    "bench": "node bench/bench.mjs",
+    "browser-check": "node test/browser-check.mjs",
+    "check-upstream": "node scripts/check-upstream.mjs"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
+  }
 }

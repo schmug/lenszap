@@ -1,8 +1,10 @@
-# LensPub Zapper (proof of concept)
+# LensZap
 
-> **Not a LensPub engine.** This tool uses your LensPub lens, but unlike a LensPub engine it hides parts of pages. A conforming Lens Engine never hides content by default ([Protocol §7.3](../spec/lenspub-protocol.md#73-unconditional-requirements)). This tool sits outside the protocol by design, and it is not tested by the [conformance suite](../conformance/README.md). The reasoning is in [Exploration: a semantic zapper built on LensPub](../docs/explorations/semantic-zapper.md), Section 5.
+A Chromium extension that hides the parts of web pages that are off your interests, judged by a small model running on your own machine. It is **built on [LensPub](https://github.com/schmug/lenspub)**: your interests are a LensPub lens, which LensZap reads, edits, and saves back as a valid new version.
 
-The zapper is a Chromium extension. On every page it splits the content into blocks, judges how well each block matches the interest topics in your [Lens Manifest](../spec/lens-manifest.md), and hides the blocks it is confident are off your lens, much like uBlock Origin's element zapper but chosen for you. Every hidden block is listed with its reasoning and can be put back.
+> **Not a LensPub engine.** This tool uses your LensPub lens, but unlike a LensPub engine it hides parts of pages. A conforming Lens Engine never hides content by default ([Protocol §7.3](https://github.com/schmug/lenspub/blob/main/spec/lenspub-protocol.md#73-unconditional-requirements)). This tool sits outside the protocol by design, and it is not tested by the [conformance suite](https://github.com/schmug/lenspub/blob/main/conformance/README.md). The reasoning is in [Exploration: a semantic zapper built on LensPub](https://github.com/schmug/lenspub/blob/main/docs/explorations/semantic-zapper.md), Section 5.
+
+On every page the zapper splits the content into blocks, judges how well each block matches the interest topics in your [Lens Manifest](https://github.com/schmug/lenspub/blob/main/spec/lens-manifest.md), and hides the blocks it is confident are off your lens, much like uBlock Origin's element zapper but chosen for you. Every hidden block is listed with its reasoning and can be put back.
 
 ![The fictional demo page with off-lens blocks hidden](screenshots/after.jpg)
 
@@ -17,7 +19,7 @@ The zapper is a Chromium extension. On every page it splits the content into blo
 - **Interest sliders.** One slider per topic in your lens. Changes apply on every page as soon as you move a slider and are kept on this device while you browse. **Save to lens** writes them into your lens as one new version.
 - **Live sliders.** Both kinds of slider re-decide every block on each step, so blocks vanish and come back while you drag. Scores are cached, so nothing is sent to the model again.
 - **Scoring as you watch.** With a model, blocks are scored a few at a time, the ones on screen first, and each is zapped as soon as its answer arrives. While a block is being scored, a small spark races round its edge, like a loading indicator; a zapped block flashes and collapses. The spark is drawn on the zapper's own layer, not on the page. Set how many requests run at once, and turn the animations off, under **Settings**. They are also off when your system asks for reduced motion.
-- **Edit your lens directly.** The **Lens** tab lists your interests: rename them, change their weights, remove them, or add new ones, and see each change's impact class before you save. **Edit as JSON** opens the whole lens. Either way, saving writes one new version, numbered by the [Adaptation Model's](../spec/adaptation-model.md#4-impact-classification) rules: a small weight change or a small new interest is minor, while a removal, a rename, or any other field is major. Import, export, and reset are here too.
+- **Edit your lens directly.** The **Lens** tab lists your interests: rename them, change their weights, remove them, or add new ones, and see each change's impact class before you save. **Edit as JSON** opens the whole lens. Either way, saving writes one new version, numbered by the [Adaptation Model's](https://github.com/schmug/lenspub/blob/main/spec/adaptation-model.md#4-impact-classification) rules: a small weight change or a small new interest is minor, while a removal, a rename, or any other field is major. Import, export, and reset are here too.
 - **Train it.** In the **Train** tab, start training, then click blocks on the page and mark each **Keep** or **Zap**. Zapped blocks are shown during training so you can mark the wrong ones, and links don't open. After six marks, the panel suggests a threshold and interest weights that would have decided your marks your way, and shows how many it gets wrong now and after. **Try these** moves your sliders; **Save to lens** in **Interests** keeps them. A block you kept that matches none of your interests can't be fixed by any setting, so the panel tells you to add an interest for it. Each mark stores only that block's scores and your label, never its text or the page it came from.
 - **Site rules.** Some sites lay items out in ways the generic splitter can't find, such as Hacker News, where each story is a set of table rows. A rule in `core/segment.js` makes each story or comment one block there.
 - **Pause on this site.** Nothing is hidden and nothing is drawn on the page: no zaps, no scoring spark, no hover popover. Blocks are still scored and decided in the background, so the panel can say how many would be hidden and resuming is instant. **Restore all** works on any page.
@@ -51,14 +53,14 @@ Zapping is a style change only. Nodes are never removed or rewritten, so **Befor
 | **Local decision model** (recommended) | llama.cpp's `llama-server` on this machine | A decision model such as Clef-flash answers one yes/no question per topic for every block, plus one question asking whether the block is a correction or cites a source. It returns calibrated probabilities from a single forward pass, with no text to parse. Moving a slider re-runs only the decision step, never the model. |
 | **Local chat model** | Ollama, LM Studio, or any OpenAI-compatible server | Any instruction-following model, asked to return scores as JSON. It's slower and less calibrated than a decision model, but works with what you may already have installed. |
 
-**Only addresses on this machine are accepted** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](../adr/0005-local-only-default.md)). A block counts as a correction or source if either the model or the word-level check says so.
+**Only addresses on this machine are accepted** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](https://github.com/schmug/lenspub/blob/main/adr/0005-local-only-default.md)). A block counts as a correction or source if either the model or the word-level check says so.
 
 ### Running a decision model locally
 
 Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/systemone`. **Ollama and LM Studio can't serve them**: a chat runner loads only the backbone and produces noise.
 
 1. **Install a recent llama.cpp.** Use `brew install llama.cpp` (or `brew upgrade llama.cpp`) on macOS, `winget install llama.cpp` on Windows, or a release build on Linux. Decision-model support (`/v1/systemone`) arrived in October 2026. Check your build with `llama-server --version`.
-2. **Start a model in its own terminal.** `llama-server` keeps running in the foreground, so run the benchmark from a second terminal. Each command downloads its model on first run. If port 8080 is taken, use any other port and pass the same one to the zapper.
+2. **Start a model in its own terminal.** `llama-server` keeps running in the foreground, so run the benchmark from a second terminal. Each command downloads its model on first run. If port 8080 is taken, use any other port and give the same one to the zapper.
 
    ```
    llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4
@@ -79,10 +81,10 @@ Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/sys
 4. **Measure it on your machine.** This scores 28 hand-labelled passages and reports latency and wrong-zap rates at each threshold, next to the word-only baseline:
 
    ```
-   npm run zapper:bench                                  # default: decision model at 127.0.0.1:8080
-   npm run zapper:bench -- --endpoint http://127.0.0.1:8181   # a different port
-   npm run zapper:bench -- --concurrency 4               # match --parallel
-   npm run zapper:bench -- --api ollama --model qwen3:4b # a chat model in Ollama, for comparison
+   npm run bench                                  # default: decision model at 127.0.0.1:8080
+   npm run bench -- --endpoint http://127.0.0.1:8181   # a different port
+   npm run bench -- --concurrency 4               # match --parallel
+   npm run bench -- --api ollama --model qwen3:4b # a chat model in Ollama, for comparison
    ```
 
 | Model | Size | Notes |
@@ -105,10 +107,10 @@ Then choose the **Chat model via Ollama** API with endpoint `http://localhost:11
 ## Install
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
-2. Choose **Load unpacked** and select this `zapper/` directory.
+2. Choose **Load unpacked** and select this repository's directory.
 3. Open any http(s) page and click the zapper's toolbar button (pin it from the puzzle-piece menu) to open the side panel. The side panel needs Chrome 116 or later.
 
-You can load the reference engine in `poc/` at the same time; the two don't interact. The zapper starts with a copy of the sample lens `avery-daily`. Import your own lens from the **Lens** tab.
+You can load LensPub's reference engine (its `poc/` directory) at the same time; the two don't interact. The zapper starts with a copy of the sample lens `avery-daily`. Import your own lens from the **Lens** tab.
 
 ## What it stores, and where
 
@@ -123,8 +125,8 @@ Everything is kept in `chrome.storage.local` on this device and never synced.
 | Model scores | A cache of page text and scores, in memory only | Never; gone when the browser stops the background worker |
 
 When you press **Save to lens**, the zapper acts as a LensPub **Manifest Producer**, and that part does claim conformance:
-- The new version validates against [the schema](../schemas/lens-manifest.schema.json).
-- The version number is bumped by impact class: a weight change of at most 0.2 is a minor change, anything larger is major ([Adaptation Model §4](../spec/adaptation-model.md#4-impact-classification)).
+- The new version validates against [the schema](https://github.com/schmug/lenspub/blob/main/schemas/lens-manifest.schema.json).
+- The version number is bumped by impact class: a weight change of at most 0.2 is a minor change, anything larger is major ([Adaptation Model §4](https://github.com/schmug/lenspub/blob/main/spec/adaptation-model.md#4-impact-classification)).
 - The old version is recorded in `versionHistory` by its content hash, with no date.
 - `modified` is rounded to the day.
 - A signature and publisher are removed, because they no longer describe the edited document.
@@ -151,8 +153,9 @@ The zapper reads these from your lens but doesn't act on them, and it lists them
 ## Tests
 
 ```
-npm run zapper:test                           # pure modules, plus Ajv validation of edited lenses (runs in CI)
-node zapper/test/browser-check.mjs [--screenshots]   # the extension in Chromium, against demo/fixture.html
+npm install                                    # once: Ajv, for the tests
+npm test                                       # pure modules, plus Ajv validation of edited lenses (runs in CI)
+npm run browser-check -- --screenshots         # the extension in Chromium, against demo/fixture.html
 ```
 
 The browser check loads the unpacked extension against the fictional fixture page and checks:
@@ -174,7 +177,7 @@ The check needs Playwright with Chromium and isn't run in CI.
 ## Layout
 
 ```
-zapper/
+lenszap/
   manifest.json          MV3 manifest
   core/                  pure, DOM-free modules (scoring, decisions, ledger check, lens editing,
                          page splitting rules, training suggestions)

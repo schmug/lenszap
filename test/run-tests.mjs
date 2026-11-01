@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Node tests for the zapper's pure modules (zapper/core/).
-// Run:  npm run zapper:test   (or: node zapper/test/run-tests.mjs)
+// Node tests for LensZap's pure modules (core/).
+// Run:  npm test   (or: node test/run-tests.mjs)
 //
 // The zapper is not a LensPub engine and is not tested by conformance/. What it
 // does claim, as a Manifest Producer, is checked here: every lens it writes
-// validates against schemas/lens-manifest.schema.json (with Ajv, independently
+// validates against the LensPub lens schema (upstream/lens-manifest.schema.json) (with Ajv, independently
 // of the bundled checker), follows version semantics, and stays history-free.
 
 import assert from 'node:assert/strict';
@@ -43,9 +43,9 @@ import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES } from '../core/segment.js';
 
-const root = fileURLToPath(new URL('../..', import.meta.url));
+const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
-const sampleLens = JSON.parse(read('zapper/lenses/sample-lens.json'));
+const sampleLens = JSON.parse(read('lenses/sample-lens.json'));
 const sha256 = async (bytes) => createHash('sha256').update(bytes).digest();
 
 const require = createRequire(import.meta.url);
@@ -53,7 +53,7 @@ const Ajv2020 = require('ajv/dist/2020').default;
 const addFormats = require('ajv-formats');
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
-const ajvValidateLens = ajv.compile(JSON.parse(read('schemas/lens-manifest.schema.json')));
+const ajvValidateLens = ajv.compile(JSON.parse(read('upstream/lens-manifest.schema.json')));
 
 let passed = 0;
 let failed = 0;
@@ -69,13 +69,15 @@ async function test(name, fn) {
 
 // --- Bundled copies stay in step with their sources ------------------------
 
-await test('bundled schema equals schemas/lens-manifest.schema.json', () => {
-  assert.deepEqual(LENS_MANIFEST_SCHEMA, JSON.parse(read('schemas/lens-manifest.schema.json')));
+// upstream/ holds the files from the pinned LensPub commit (upstream/LENSPUB_COMMIT);
+// scripts/check-upstream.mjs compares them with a LensPub checkout.
+await test('bundled schema equals upstream/lens-manifest.schema.json', () => {
+  assert.deepEqual(LENS_MANIFEST_SCHEMA, JSON.parse(read('upstream/lens-manifest.schema.json')));
 });
 
-await test('schema-check.js equals poc/engine/schema-check.js below its header', () => {
+await test('schema-check.js equals upstream/schema-check.js below its header', () => {
   const body = (s) => s.slice(s.indexOf('// A dependency-free checker'));
-  assert.equal(body(read('zapper/core/schema-check.js')), body(read('poc/engine/schema-check.js')));
+  assert.equal(body(read('core/schema-check.js')), body(read('upstream/schema-check.js')));
 });
 
 await test('sample lens validates (Ajv and bundled checker)', () => {
@@ -392,7 +394,7 @@ await test('modelScorerId names the API, and the model when set', () => {
 });
 
 await test('bench passages are labelled and fictional-lens compatible', () => {
-  const { passages } = JSON.parse(read('zapper/bench/passages.json'));
+  const { passages } = JSON.parse(read('bench/passages.json'));
   assert.ok(passages.length >= 20);
   for (const p of passages) assert.ok(['keep', 'zap', 'evidence'].includes(p.label), p.id);
   assert.equal(new Set(passages.map((p) => p.id)).size, passages.length);
@@ -521,5 +523,5 @@ await test('train: toExample keeps numbers only, and skips evidence and unscored
   assert.deepEqual(evalTraining([ex], [{ topic: 'a', weight: 1 }], 0.8), { falseZaps: 0, missed: 0, wrong: 0, total: 1 });
 });
 
-console.log(`zapper: ${passed} passed, ${failed} failed`);
+console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

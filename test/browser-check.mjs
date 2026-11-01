@@ -3,10 +3,10 @@
 // End-to-end check of the zapper extension in Chromium, against the fictional
 // fixture page. Not part of CI (it needs a browser); run it by hand:
 //
-//   node zapper/test/browser-check.mjs [--screenshots]
+//   node test/browser-check.mjs [--screenshots]
 //
 // Needs the `playwright` package and a Chromium it can launch. It serves
-// zapper/demo/ on 127.0.0.1, loads the unpacked extension, and checks that the
+// demo/ on 127.0.0.1, loads the unpacked extension, and checks that the
 // right blocks are hidden, that page controls and the correction never are,
 // that Before/After, Show, the hover popover, and live sliders work, that
 // saving an interest change writes a valid new lens version, that a site rule
