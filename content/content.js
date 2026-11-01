@@ -50,6 +50,7 @@
   let decisionById = new Map();
   let scorerId = state.settings.scorer === 'lexical' ? LEXICAL_SCORER_ID : 'model (not yet run)';
   let modelError = null;
+  const requestLog = []; // last model requests on this page: { n, ms, ok }, for the debug report
   let ledgerFailure = null;
   let nextId = 1;
   // Slider positions the side panel is previewing on this page, before they are stored.
@@ -210,16 +211,23 @@
       inFlight++;
       ids.forEach((id) => active.add(id));
       drawSparks();
+      const sentAt = performance.now();
+      const logRequest = (ok) => {
+        requestLog.push({ n: ids.length, ms: Math.round(performance.now() - sentAt), ok });
+        if (requestLog.length > 200) requestLog.shift();
+      };
       send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
         .then((res) => {
           if (gen !== generation) return;
           if (!res || res.error) throw new Error(res?.error ?? 'no answer from the extension');
+          logRequest(true);
           scorerId = res.scorer;
           for (const s of res.scores) if (s) scores.set(s.id, s);
         })
         .catch((err) => {
           // Blocks without scores are never zapped: a failed model hides nothing.
           if (gen === generation) {
+            logRequest(false);
             modelError = String(err?.message ?? err);
             stopScoring();
           }
@@ -377,8 +385,59 @@
     else for (const [id, l] of labels) if (blocks.has(id)) setAttr(blocks.get(id), 'data-lpz-label', l);
   }
 
+  /**
+   * Everything needed to troubleshoot this page, for the side panel's debug
+   * report. Page text is included only when the reader asks for it.
+   */
+  function debugReport({ text = false } = {}) {
+    const byId = new Map(decisions.map((d) => [d.id, d]));
+    const ms = requestLog.filter((r) => r.ok).map((r) => r.ms).sort((a, b) => a - b);
+    return {
+      host,
+      url: text ? location.href : undefined,
+      extension: chrome.runtime.getManifest().version,
+      generated: new Date().toISOString(),
+      scorer: scorerId,
+      settings: {
+        scorer: state.settings.scorer,
+        threshold: threshold(),
+        model: state.settings.scorer === 'model' ? { ...state.settings.model } : undefined
+      },
+      site: { rule: rule?.name ?? null, paused: paused() },
+      lens: { id: state.lens.id, version: state.lens.metadata?.lensVersion, priorities: priorities() },
+      progress: { ...progress, queued: queue.length, inFlight },
+      modelError,
+      ledgerFailure: ledgerFailure ?? null,
+      requests: {
+        count: requestLog.length,
+        failed: requestLog.filter((r) => !r.ok).length,
+        medianMs: ms.length ? ms[Math.floor(ms.length / 2)] : null,
+        p95Ms: ms.length ? ms[Math.min(ms.length - 1, Math.floor(ms.length * 0.95))] : null,
+        recent: requestLog.slice(-20)
+      },
+      blocks: [...blocks].map(([id, b]) => {
+        const d = byId.get(id);
+        const s = scores.get(id);
+        return {
+          id,
+          tag: b.els[0].tagName.toLowerCase(),
+          chars: b.text.length,
+          zap: d?.zap ?? false,
+          offLens: d?.offLens ?? null,
+          exempt: d?.exempt ?? null,
+          matches: s?.matches ?? null,
+          evidence: s?.evidence ?? null,
+          unscored: s?.unscored ?? !s,
+          trace: d?.trace ?? null,
+          text: text ? b.text.slice(0, 300) : undefined
+        };
+      })
+    };
+  }
+
   const pageActions = {
     get: () => snapshot(),
+    debug: ({ text }) => debugReport({ text }),
     restore: ({ id }) => { restored.add(id); apply(); showBlock(id); },
     unrestore: ({ id }) => { restored.delete(id); apply(); },
     'restore-all': () => { decisions.filter((d) => d.zap).forEach((d) => restored.add(d.id)); apply(); },

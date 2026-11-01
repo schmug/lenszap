@@ -15,6 +15,9 @@
 //
 // Options: --data DIR  --lens FILE  --api lexical|systemone|ollama|openai  --endpoint URL
 //          --model NAME  --concurrency N  --at THRESHOLD (detail rows; default 0.8)
+//          --method topics|categories|both (model scoring: per-topic questions, label-first
+//          categories, or both side by side; categories needs --api systemone; default topics)
+//          --zap-ads (add a "less of this" priority for ads, as a reader setting would)
 //          --show (list every mistake with its text)  --json  --save (write results to DATA/results/)
 //
 // Model requests go only to the loopback endpoint you name.
@@ -25,6 +28,7 @@ import { join } from 'node:path';
 import { scoreLexical, LEXICAL_SCORER_ID } from '../core/lexical-scorer.js';
 import { decide } from '../core/decide.js';
 import { scoreWithEndpoint, modelScorerId, isLoopbackEndpoint } from '../core/model-scorer.js';
+import { scoreByCategories, AD_TOPIC, CATEGORIZE_SCORER_PREFIX } from '../core/categorize.js';
 import { loadDataset, parseArgs } from './lib.mjs';
 import { compare, total, rates } from './metrics.mjs';
 
@@ -43,6 +47,13 @@ const THRESHOLDS = [...new Set([0.5, 0.6, 0.7, 0.8, 0.9, at])].sort();
 
 const lens = JSON.parse(readFileSync(args.lens ?? join(root, 'lenses/sample-lens.json'), 'utf8'));
 const priorities = lens.interpretation.priorities.map(({ topic, weight }) => ({ topic, weight }));
+if (args['zap-ads']) priorities.push({ topic: AD_TOPIC, weight: -1 });
+const method = args.method ?? 'topics';
+if (!['topics', 'categories', 'both'].includes(method)) throw new Error('--method must be topics, categories, or both');
+if (method !== 'topics' && api !== 'systemone') {
+  console.error('Label-first scoring (--method categories) needs a decision model: --api systemone.');
+  process.exit(2);
+}
 const topics = priorities.map((p) => p.topic);
 
 const dataset = loadDataset(dataDir).filter((d) => Object.keys(d.labels).length > 0);
@@ -54,6 +65,9 @@ if (dataset.length === 0) {
 const textOf = new Map();
 for (const { page } of dataset) for (const b of page.blocks) textOf.set(b.key, b.text);
 
+// Label-first: the topic → category relevance table is asked once and reused.
+let relevance;
+
 async function scoreAll(scorer) {
   const perPage = [];
   const timings = [];
@@ -61,10 +75,14 @@ async function scoreAll(scorer) {
   for (const { slug, page, labels } of dataset) {
     // Only labelled blocks are scored: unlabelled ones cannot be judged.
     const blocks = page.blocks.filter((b) => labels[b.key] && labels[b.key] !== 'skip').map((b) => ({ id: b.key, text: b.text }));
-    const scores =
-      scorer === 'lexical'
-        ? scoreLexical(blocks, topics)
-        : await scoreWithEndpoint(settings, blocks, topics, fetch, { concurrency, onTiming: (_id, ms) => timings.push(ms) });
+    const onTiming = (_id, ms) => timings.push(ms);
+    let scores;
+    if (scorer === 'lexical') scores = scoreLexical(blocks, topics);
+    else if (scorer === 'categories') {
+      const r = await scoreByCategories(settings, blocks, topics, fetch, { concurrency, onTiming, relevance });
+      relevance = r.relevance;
+      scores = r.scores;
+    } else scores = await scoreWithEndpoint(settings, blocks, topics, fetch, { concurrency, onTiming });
     perPage.push({ slug, labels, scores });
   }
   return { perPage, wallMs: performance.now() - t0, timings };
@@ -90,26 +108,30 @@ if (api !== 'lexical') {
     console.error('Refusing: --endpoint must be on this machine (localhost, 127.0.0.1, or [::1]).');
     process.exit(2);
   }
-  const id = modelScorerId(settings);
   try {
     await scoreWithEndpoint(settings, [{ id: 'warm', text: 'Warm-up passage.' }], topics, fetch);
   } catch (err) {
     console.error(`Could not reach ${settings.endpoint} (${api}): ${err.message}`);
     process.exit(1);
   }
-  const res = await scoreAll('model');
-  const unscored = res.perPage.reduce((n, p) => n + p.scores.filter((s) => s.unscored).length, 0);
-  res.timings.sort((a, b) => a - b);
-  const pct = (q) => Math.round(res.timings[Math.min(res.timings.length - 1, Math.floor(q * res.timings.length))] ?? 0);
-  runs.push({
-    scorer: id,
-    timing: { wallMs: Math.round(res.wallMs), perBlockMedianMs: pct(0.5), perBlockP95Ms: pct(0.95), concurrency },
-    unscored,
-    rows: evaluate(res, id)
-  });
+  const methods = method === 'both' ? ['topics', 'categories'] : [method];
+  for (const m of methods) {
+    const id = m === 'categories' ? `${CATEGORIZE_SCORER_PREFIX}+${modelScorerId(settings)}` : modelScorerId(settings);
+    const res = await scoreAll(m === 'categories' ? 'categories' : 'model');
+    const unscored = res.perPage.reduce((n, p) => n + p.scores.filter((s) => s.unscored).length, 0);
+    res.timings.sort((a, b) => a - b);
+    const pct = (q) => Math.round(res.timings[Math.min(res.timings.length - 1, Math.floor(q * res.timings.length))] ?? 0);
+    runs.push({
+      scorer: id,
+      timing: { wallMs: Math.round(res.wallMs), perBlockMedianMs: pct(0.5), perBlockP95Ms: pct(0.95), concurrency },
+      unscored,
+      rows: evaluate(res, id),
+      ...(m === 'categories' ? { relevance } : {})
+    });
+  }
 }
 
-const result = { data: dataDir, lens: lens.id, pages: dataset.length, date: new Date().toISOString().slice(0, 10), runs };
+const result = { data: dataDir, lens: lens.id, zapAds: !!args['zap-ads'], pages: dataset.length, date: new Date().toISOString().slice(0, 10), runs };
 
 if (args.save) {
   mkdirSync(join(dataDir, 'results'), { recursive: true });

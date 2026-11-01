@@ -606,6 +606,27 @@ function renderSettings(message) {
     say(`${r.scorer} answered in ${r.ms} ms. A ransomware story scored ${fmt(a)} for “school cybersecurity”; a football story scored ${fmt(b)}.`);
   };
 
+  const textBox = h('input', { type: 'checkbox' });
+  const includeText = h('label', { class: 'check' }, textBox, ' Include page text and address (for pages you are happy to share)');
+  const debugStatus = h('div', { class: 'status', role: 'status' });
+  const debugReport = async (how) => {
+    const [pageReport, worker] = await Promise.all([pageAction('debug', { text: textBox.checked }), send('debug-info')]);
+    if (!pageReport) {
+      debugStatus.replaceChildren(h('div', { class: 'error', text: 'The zapper is not running on this tab.' }));
+      return;
+    }
+    const json = JSON.stringify({ ...pageReport, worker }, null, 2);
+    if (how === 'copy') {
+      await navigator.clipboard.writeText(json);
+      debugStatus.replaceChildren(h('div', { class: 'ok', text: `Copied (${pageReport.blocks.length} blocks).` }));
+    } else {
+      const a = h('a', { href: URL.createObjectURL(new Blob([json], { type: 'application/json' })), download: `lenszap-debug-${pageReport.host}-${pageReport.generated.slice(0, 10)}.json` });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      debugStatus.replaceChildren(h('div', { class: 'ok', text: 'Saved.' }));
+    }
+  };
+
   setBody(
     message ? h('div', { class: 'ok', role: 'status', text: message }) : null,
     h('h3', { text: host ? `This site: ${host}` : 'This site' }),
@@ -639,6 +660,14 @@ function renderSettings(message) {
         h('button', { text: 'Save', on: { click: async () => { if (await saveModel()) say('Saved.'); } } }),
         h('button', { class: 'primary', text: 'Test connection', on: { click: test } })),
       status) : null,
+
+    h('h3', { text: 'Troubleshooting' }),
+    h('p', { class: 'note', text: 'A report of this page: settings, model timings and errors, and every block’s scores and reasoning. Nothing is sent anywhere; copy it or save it and share it yourself.' }),
+    includeText,
+    h('div', { class: 'actions' },
+      h('button', { text: 'Copy debug report', disabled: !page, on: { click: () => debugReport('copy') } }),
+      h('button', { text: 'Save as file', disabled: !page, on: { click: () => debugReport('save') } })),
+    debugStatus,
 
     h('h3', { text: 'Kept on this device only' }),
     h('p', { class: 'note', text: 'Unsaved slider positions, per-site settings, and training marks. None of it is written into your lens or exported.' }),

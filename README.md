@@ -119,7 +119,10 @@ npm run label                                   # opens a labelling page at http
 npm run eval                                    # word-only baseline
 npm run eval -- --api systemone --show          # plus your llama-server model, listing every mistake
 npm run eval -- --lens my-lens.json --at 0.7    # your own lens, detail at a 70% threshold
+npm run eval -- --api systemone --method both --zap-ads   # per-topic vs label-first scoring, with ads zapped
 ```
+
+**Label-first scoring** (`--method categories`, experimental, decision models only) first gives each block a confidence for each of a fixed list of categories (`core/categorize.js`), whatever your lens is. It then relates each lens topic to those categories once. A block's match to a topic is its best category confidence × relevance. The categories don't depend on the lens, so they could be cached across lens edits and sites. The cost is about 23 questions per block instead of one per topic. The eval shows whether that is worth it. `--zap-ads` adds a "less of this" priority for ads, which label-first scoring matches straight to its ad category.
 
 Captures and labels go to `eval/data/`, which git ignores, because captured text is the sites' own content. Label against the lens you pass with `--lens`; the labeller records which lens it was.
 
@@ -133,6 +136,15 @@ Captures and labels go to `eval/data/`, which git ignores, because captured text
 | mixed | Several items run together; the splitter should have split it |
 
 `eval/demo/` holds the two fictional demo pages, captured and labelled, so `npm run eval -- --data eval/demo` works without capturing anything.
+
+## Troubleshooting
+
+**Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
+- your settings and lens priorities;
+- request counts, latency, and recent errors from the model;
+- every block's scores, decision, and reasoning.
+
+It leaves out page text and the address unless you tick the box. Nothing is sent anywhere. Paste the report into an issue or a chat when something looks wrong.
 
 ## Install
 

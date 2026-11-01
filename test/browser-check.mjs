@@ -130,6 +130,23 @@ if (shots) {
   await panel.screenshot({ path: join(shots, 'panel-ledger.jpg'), quality: 85 });
 }
 
+// The debug report: every block with its decision, and no page text unless asked.
+{
+  const report = await panel.evaluate((id) => chrome.tabs.sendMessage(id, { type: 'page-action', action: 'debug', text: false }), tabId);
+  assert.equal(report.host, '127.0.0.1');
+  assert.equal(report.url, undefined, 'no address without asking');
+  assert.ok(report.blocks.length >= 10);
+  assert.equal(report.blocks.filter((b) => b.zap).length, initial.length, 'report agrees with the page');
+  assert.ok(report.blocks.every((b) => b.text === undefined && typeof b.trace === 'string'));
+  const withText = await panel.evaluate((id) => chrome.tabs.sendMessage(id, { type: 'page-action', action: 'debug', text: true }), tabId);
+  assert.ok(withText.blocks.some((b) => b.text.includes('mild weekend')));
+  const worker = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'debug-info' }));
+  assert.deepEqual(worker.recentErrors, []);
+  await tab('Settings');
+  assert.equal(await panel.isEnabled('button:text-is("Copy debug report")'), true);
+  await tab('Ledger');
+}
+
 // Before/After shows the page as published, with zaps outlined.
 await panel.click('#before');
 await page.waitForTimeout(100);

@@ -68,6 +68,14 @@ function cacheKey(settings, topics, text) {
   return `${h.toString(16)}:${s.length}`;
 }
 
+// The last few model failures, in memory only, for the side panel's debug
+// report. No page text: the endpoint, the error, and how long it took.
+const recentErrors = [];
+function noteError(m, err, ms, blocks) {
+  recentErrors.push({ at: new Date().toISOString(), api: m.api, endpoint: m.endpoint, blocks, ms, error: String(err?.message ?? err).slice(0, 300) });
+  if (recentErrors.length > 20) recentErrors.shift();
+}
+
 async function scoreWithModel(blocks, topics) {
   const { settings } = await load();
   const m = settings.model;
@@ -78,7 +86,14 @@ async function scoreWithModel(blocks, topics) {
     if (hit) results.set(b.id, { ...hit, id: b.id });
     else todo.push(b);
   }
-  const fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i));
+  const t0 = Date.now();
+  let fresh;
+  try {
+    fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i));
+  } catch (err) {
+    noteError(m, err, Date.now() - t0, todo.length);
+    throw err;
+  }
   fresh.forEach((r, i) => {
     results.set(r.id, r);
     if (!r.unscored) {
@@ -199,6 +214,10 @@ const handlers = {
     await chrome.storage.local.remove(['draftWeights', 'sites', 'training']);
     scoreCache.clear();
     return { ok: true };
+  },
+
+  async 'debug-info'() {
+    return { recentErrors: [...recentErrors], cachedScores: scoreCache.size };
   },
 
   async 'score-model'({ blocks, topics }) {

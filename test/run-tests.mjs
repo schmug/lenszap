@@ -536,6 +536,52 @@ await test('train: toExample keeps numbers only, and skips evidence and unscored
   assert.deepEqual(evalTraining([ex], [{ topic: 'a', weight: 1 }], 0.8), { falseZaps: 0, missed: 0, wrong: 0, total: 1 });
 });
 
+// --- Label-first scoring (core/categorize.js) --------------------------------
+
+await test('categorize: requests ask every category, loopback only', async () => {
+  const c = await import('../core/categorize.js');
+  const { url, init } = c.buildCategorizeRequest({ endpoint: 'http://127.0.0.1:8080/' }, { id: 'b', text: 'x'.repeat(5000) });
+  assert.equal(url, 'http://127.0.0.1:8080/v1/systemone');
+  const body = JSON.parse(init.body);
+  assert.deepEqual(Object.keys(body.questions).sort(), [...c.CATEGORIES.map((x) => x.id), 'evidence'].sort());
+  assert.ok(body.state.length < 1600, 'block text is capped');
+  assert.throws(() => c.buildCategorizeRequest({ endpoint: 'https://api.example.com' }, { id: 'b', text: 'x' }));
+  assert.throws(() => c.buildRelevanceRequest({ endpoint: 'http://10.0.0.2:8080' }, 'topic'));
+});
+
+await test('categorize: a block with no answers is unscored; matches are best category × relevance', async () => {
+  const c = await import('../core/categorize.js');
+  assert.equal(c.parseCategorizeResponse({ answers: {} }, { id: 'b' }).unscored, true);
+  const p = c.parseCategorizeResponse({ answers: { security: { noul: 0.9 }, education: { noul: 0.7 }, evidence: { noul: 0.2 } } }, { id: 'b' });
+  assert.equal(p.unscored, undefined);
+  assert.equal(p.evidence, false);
+  const m = c.matchesFromCategories(p.categories, {
+    'school cybersecurity': { security: 0.8, education: 0.9 },
+    [c.AD_TOPIC]: c.AD_RELEVANCE
+  });
+  assert.equal(m['school cybersecurity'], 0.72);
+  assert.equal(m[c.AD_TOPIC], 0);
+});
+
+await test('categorize: scoreByCategories asks relevance once per topic, never for the ad topic', async () => {
+  const c = await import('../core/categorize.js');
+  const seen = [];
+  const fakeFetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    seen.push(body.state.split('\n')[0]);
+    const answers = Object.fromEntries(Object.keys(body.questions).map((k) => [k, { noul: k === 'ad' && /Buy now/.test(body.state) ? 0.95 : 0.1 }]));
+    return { ok: true, json: async () => ({ answers }) };
+  };
+  const blocks = [{ id: 'a', text: 'Buy now: 40% off laptops' }, { id: 'b', text: 'Correction: the meeting is Tuesday.' }];
+  const { scores, relevance } = await c.scoreByCategories({ endpoint: 'http://127.0.0.1:1' }, blocks, ['gardening', c.AD_TOPIC], fakeFetch, { concurrency: 1 });
+  assert.equal(seen.filter((s) => s.startsWith("A reader's interest")).length, 1);
+  assert.equal(scores[0].matches[c.AD_TOPIC], 0.95);
+  assert.equal(scores[1].evidence, true, 'the word-level evidence guard still applies');
+  const again = await c.scoreByCategories({ endpoint: 'http://127.0.0.1:1' }, blocks, ['gardening'], fakeFetch, { relevance });
+  assert.equal(seen.filter((s) => s.startsWith("A reader's interest")).length, 1, 'a cached relevance table is reused');
+  assert.equal(again.scores.length, 2);
+});
+
 // --- Eval tooling (eval/) -----------------------------------------------------
 
 await test('eval: compare counts wrong zaps, misses, ads, evidence, and bad splits', async () => {
