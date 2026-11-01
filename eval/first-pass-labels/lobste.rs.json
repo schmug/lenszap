@@ -1,0 +1,31 @@
+{
+  "lens": "https://avery.example/lenses/avery-daily",
+  "labeller": "first pass by Claude against Schmug's lens; correct freely",
+  "labels": {
+    "d37e12861412": "zap",
+    "c03727116e3d": "zap",
+    "3b45fff41c34": "keep",
+    "5b09587cfa0a": "zap",
+    "6cdc4f9bf110": "zap",
+    "3d910cd69c12": "zap",
+    "c43d90439571": "keep",
+    "62029caf4001": "zap",
+    "0a01f877ef90": "zap",
+    "aaeb15ad0a45": "zap",
+    "23d4426ef337": "zap",
+    "e870e9107be4": "zap",
+    "0648e107d8b4": "zap",
+    "fe6fa8a6c960": "zap",
+    "026aee2b238f": "zap",
+    "55f7695096b2": "keep",
+    "4fdf22257168": "zap",
+    "3b6202986f0e": "zap",
+    "6169c786e8c2": "zap",
+    "9c6929855196": "zap",
+    "e06d34e2b31a": "zap",
+    "a00c9d7378d6": "zap",
+    "4380bb69ecf6": "keep",
+    "a05ecb5d0fd6": "zap",
+    "ecf7e21079de": "zap"
+  }
+}

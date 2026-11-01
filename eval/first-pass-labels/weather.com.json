@@ -1,0 +1,7 @@
+{
+  "lens": "https://avery.example/lenses/avery-daily",
+  "labeller": "first pass by Claude against Schmug's lens; correct freely",
+  "labels": {
+    "b57fc0d3dbb8": "mixed"
+  }
+}
