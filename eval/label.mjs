@@ -10,13 +10,13 @@ import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { LABELS, loadDataset, parseArgs } from './lib.mjs';
+import { LABELS, loadDataset, parseArgs, readLens } from './lib.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dataDir = args.data ?? join(root, 'eval/data');
 const port = Number(args.port ?? 8765);
-const lensId = JSON.parse(readFileSync(args.lens ?? join(root, 'lenses/sample-lens.json'), 'utf8')).id;
+const lensId = readLens(args.lens ?? join(root, 'lenses/sample-lens.json')).id;
 const SLUG = /^[a-z0-9][a-z0-9.-]*$/;
 
 const send = (res, status, body, type = 'application/json') => {

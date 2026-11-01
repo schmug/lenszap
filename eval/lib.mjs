@@ -82,3 +82,13 @@ export function parseArgs(argv) {
   }
   return out;
 }
+
+/** Read a lens file, or exit with a hint about where to get one. */
+export function readLens(path) {
+  if (!existsSync(path)) {
+    console.error(`No lens file at ${path}.`);
+    console.error('Export yours from the side panel (Lens tab, Export), or leave out --lens to use the sample lens.');
+    process.exit(2);
+  }
+  return readJson(path);
+}

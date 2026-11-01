@@ -26,7 +26,13 @@ import { join } from 'node:path';
 import { blockKey, slugFor, parseArgs } from './lib.mjs';
 
 const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch {
+  console.error('Playwright is missing. Run: npm install && npx playwright install chromium');
+  process.exit(2);
+}
 
 const args = parseArgs(process.argv.slice(2));
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -34,6 +40,12 @@ const dataDir = args.data ?? join(root, 'eval/data');
 const wait = Number(args.wait ?? 3000);
 const version = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).version;
 
+const notUrls = args._.filter((t) => !/^https?:\/\//i.test(t));
+if (notUrls.length) {
+  console.error(`Not a web address: ${notUrls.join(' ')}`);
+  console.error('Pass http(s) URLs, or --list FILE. (A "#" comment on the command line is passed along as words in zsh.)');
+  process.exit(2);
+}
 const targets = [...args._];
 if (args.list) {
   for (const line of readFileSync(args.list, 'utf8').split('\n')) {
@@ -53,12 +65,19 @@ if (targets.length === 0) {
 mkdirSync(join(dataDir, 'pages'), { recursive: true });
 if (args.shots) mkdirSync(join(dataDir, 'shots'), { recursive: true });
 
-const context = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'lpz-capture-')), {
-  headless: !args.headed,
-  channel: 'chromium', // headless_shell cannot load extensions
-  viewport: { width: 1280, height: 900 },
-  args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`]
-});
+let context;
+try {
+  context = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'lpz-capture-')), {
+    headless: !args.headed,
+    channel: 'chromium', // headless_shell cannot load extensions
+    viewport: { width: 1280, height: 900 },
+    args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`]
+  });
+} catch (err) {
+  console.error(`Could not start Chromium: ${err.message.split('\n')[0]}`);
+  console.error('If the browser is not installed yet, run: npx playwright install chromium');
+  process.exit(2);
+}
 if (!context.serviceWorkers().length) await context.waitForEvent('serviceworker');
 if (args.file) {
   const body = readFileSync(args.file);

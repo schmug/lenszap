@@ -15,7 +15,8 @@ saves validates, is versioned by impact class, and is history-free).
 ## Commands
 
 ```
-npm install              # once; Ajv devDependencies for the tests
+npm install              # once; Ajv and Playwright devDependencies
+npx playwright install chromium   # once, for capture and browser-check
 npm test                 # test/run-tests.mjs — pure modules + Ajv validation (CI, Node 18 and 22)
 npm run browser-check    # test/browser-check.mjs — the extension in Chromium via Playwright (not in CI)
 npm run bench            # bench/bench.mjs — speed and wrong-zap rates for a scorer on this machine

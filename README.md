@@ -114,10 +114,12 @@ The benchmark above scores 28 hand-written passages. The eval scores real pages,
 - how long the model took per block.
 
 ```
+npm install && npx playwright install chromium  # once
 npm run capture -- --list eval/sites.txt        # or name URLs; add --headed if a site blocks headless browsers
 npm run label                                   # opens a labelling page at http://127.0.0.1:8765/
 npm run eval                                    # word-only baseline
 npm run eval -- --api systemone --show          # plus your llama-server model, listing every mistake
+npm run eval -- --api systemone --endpoint http://127.0.0.1:8181   # llama-server on another port
 npm run eval -- --lens my-lens.json --at 0.7    # your own lens, detail at a 70% threshold
 npm run eval -- --api systemone --method both --zap-ads   # per-topic vs label-first scoring, with ads zapped
 ```

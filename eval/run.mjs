@@ -29,7 +29,7 @@ import { scoreLexical, LEXICAL_SCORER_ID } from '../core/lexical-scorer.js';
 import { decide } from '../core/decide.js';
 import { scoreWithEndpoint, modelScorerId, isLoopbackEndpoint } from '../core/model-scorer.js';
 import { scoreByCategories, AD_TOPIC, CATEGORIZE_SCORER_PREFIX } from '../core/categorize.js';
-import { loadDataset, parseArgs } from './lib.mjs';
+import { loadDataset, parseArgs, readLens } from './lib.mjs';
 import { compare, total, rates } from './metrics.mjs';
 
 const args = parseArgs(process.argv.slice(2));
@@ -45,7 +45,7 @@ const concurrency = Number(args.concurrency ?? 4);
 const at = Number(args.at ?? 0.8);
 const THRESHOLDS = [...new Set([0.5, 0.6, 0.7, 0.8, 0.9, at])].sort();
 
-const lens = JSON.parse(readFileSync(args.lens ?? join(root, 'lenses/sample-lens.json'), 'utf8'));
+const lens = readLens(args.lens ?? join(root, 'lenses/sample-lens.json'));
 const priorities = lens.interpretation.priorities.map(({ topic, weight }) => ({ topic, weight }));
 if (args['zap-ads']) priorities.push({ topic: AD_TOPIC, weight: -1 });
 const method = args.method ?? 'topics';
