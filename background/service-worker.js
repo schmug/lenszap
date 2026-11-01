@@ -23,8 +23,13 @@
 import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 
+// Default zap threshold per scorer. The word-only scorer's confidence is coarse,
+// so it waits for 80%. For a model, the first eval (Kev-4B, 508 labelled
+// blocks) found 60-65% the best balance: 80% left over half of what should go.
+const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65 };
+
 const DEFAULT_SETTINGS = {
-  threshold: 0.8,
+  threshold: DEFAULT_THRESHOLD.lexical,
   scorer: 'lexical',
   // Display: score popover on hover, scoring and zapping animations, sidebar state.
   hoverInfo: true,
@@ -149,6 +154,12 @@ const handlers = {
   async 'set-settings'({ patch }) {
     const { settings } = await load();
     const next = { ...settings, ...patch, model: { ...settings.model, ...(patch.model ?? {}) } };
+    // Switching scorer moves the threshold to the new scorer's default, unless
+    // the reader had already moved it away from the old one's.
+    if (patch.scorer && patch.scorer !== settings.scorer && patch.threshold === undefined &&
+        Math.abs(settings.threshold - (DEFAULT_THRESHOLD[settings.scorer] ?? settings.threshold)) < 1e-9) {
+      next.threshold = DEFAULT_THRESHOLD[patch.scorer] ?? settings.threshold;
+    }
     await chrome.storage.local.set({ settings: next });
     return { settings: next };
   },

@@ -121,10 +121,13 @@ npm run eval                                    # word-only baseline
 npm run eval -- --api systemone --show          # plus your llama-server model, listing every mistake
 npm run eval -- --api systemone --endpoint http://127.0.0.1:8181   # llama-server on another port
 npm run eval -- --lens my-lens.json --at 0.7    # your own lens, detail at a 70% threshold
-npm run eval -- --api systemone --method both --zap-ads   # per-topic vs label-first scoring, with ads zapped
+npm run eval -- --api systemone --zap-ads      # with a "less of this" priority for ads added
+npm run capture -- --resplit                    # after a splitter change: re-split the saved pages
 ```
 
-**Label-first scoring** (`--method categories`, experimental, decision models only) first gives each block a confidence for each of a fixed list of categories (`core/categorize.js`), whatever your lens is. It then relates each lens topic to those categories once. A block's match to a topic is its best category confidence × relevance. The categories don't depend on the lens, so they could be cached across lens edits and sites. The cost is about 23 questions per block instead of one per topic. The eval shows whether that is worth it. `--zap-ads` adds a "less of this" priority for ads, which label-first scoring matches straight to its ad category.
+Each capture also saves the page's HTML, with scripts removed, to `eval/data/snapshots/`. `--resplit` splits those snapshots again with the current splitter instead of fetching the sites. A block whose text didn't change keeps its label. A block cut out of one labelled block inherits that label, unless that block was labelled mixed. The capture lists how many blocks are left to label.
+
+The first real eval (12 pages, 508 blocks, Kev-4B) found 60–65% the best threshold for a model. At 80%, the model kept over half of what should go. So the extension's default threshold is 65% for a model and 80% for word-only scoring. Switching scorers moves the threshold to the new scorer's default, unless you had changed it. A label-first variant was also tried, which put every block into a fixed list of categories first. It kept 98% of what should go and was 5× slower, so it was removed.
 
 The labeller shows a fixed random sample of 15 blocks per page by default (or 30, or all), and moves on to the next page when you finish one. A sample measures the zapper just as fairly, so label more pages rather than more of one page.
 
@@ -216,7 +219,9 @@ The browser check loads the unpacked extension against the fictional fixture pag
 - training: clicks mark blocks instead of following links, marks hold only scores and a label, and the panel gives a suggestion;
 - pausing a site hides nothing and shows no popover, while the panel still counts what would be hidden;
 - on a fictional page laid out in table rows (`demo/link-table.html`, served at the Hacker News hostname), each story is one block, and the top links are never judged;
+- on a fictional page of tricky layouts (`demo/splitter.html`), a repo card with its stats and Star button is one block, a multi-story card and a "Most read" list split into their stories, a caption joins its paragraph, and tag lines, category lists, and pagers are never blocks;
 - the model-scorer path works over all three APIs (against a stand-in model server), including that a block the model skips stays visible, never sends more requests at once than the setting allows, and draws the scoring spark while the model works.
+- on a long page, a model scores only the blocks near the screen and more as you scroll; the score cache lives in session storage (memory only), holds no page text, and answers a revisit without asking the model again.
 
 The check needs Playwright with Chromium and isn't run in CI.
 

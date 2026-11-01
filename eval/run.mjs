@@ -14,9 +14,8 @@
 //   node eval/run.mjs --api systemone --at 0.7 --show
 //
 // Options: --data DIR  --lens FILE  --api lexical|systemone|ollama|openai  --endpoint URL
-//          --model NAME  --concurrency N  --at THRESHOLD (detail rows; default 0.8)
-//          --method topics|categories|both (model scoring: per-topic questions, label-first
-//          categories, or both side by side; categories needs --api systemone; default topics)
+//          --model NAME  --concurrency N  --at THRESHOLD (detail rows; default 0.8 for
+//          word-only and 0.65 for a model, the extension's defaults)
 //          --zap-ads (add a "less of this" priority for ads, as a reader setting would)
 //          --show (list every mistake with its text)  --json  --save (write results to DATA/results/)
 //
@@ -28,7 +27,6 @@ import { join } from 'node:path';
 import { scoreLexical, LEXICAL_SCORER_ID } from '../core/lexical-scorer.js';
 import { decide } from '../core/decide.js';
 import { scoreWithEndpoint, modelScorerId, isLoopbackEndpoint } from '../core/model-scorer.js';
-import { scoreByCategories, AD_TOPIC, CATEGORIZE_SCORER_PREFIX } from '../core/categorize.js';
 import { loadDataset, parseArgs, readLens } from './lib.mjs';
 import { compare, total, rates } from './metrics.mjs';
 
@@ -42,18 +40,14 @@ const settings = {
   model: typeof args.model === 'string' ? args.model : ''
 };
 const concurrency = Number(args.concurrency ?? 4);
-const at = Number(args.at ?? 0.8);
-const THRESHOLDS = [...new Set([0.5, 0.6, 0.7, 0.8, 0.9, at])].sort();
+// The extension's default thresholds (background/service-worker.js).
+const atFor = (scorerId) => Number(args.at ?? (scorerId === LEXICAL_SCORER_ID ? 0.8 : 0.65));
+const THRESHOLDS = [...new Set([0.5, 0.6, 0.65, 0.7, 0.8, 0.9, ...(args.at ? [Number(args.at)] : [])])].sort();
+const AD_TOPIC = 'advertising or sponsored content';
 
 const lens = readLens(args.lens ?? join(root, 'lenses/sample-lens.json'));
 const priorities = lens.interpretation.priorities.map(({ topic, weight }) => ({ topic, weight }));
 if (args['zap-ads']) priorities.push({ topic: AD_TOPIC, weight: -1 });
-const method = args.method ?? 'topics';
-if (!['topics', 'categories', 'both'].includes(method)) throw new Error('--method must be topics, categories, or both');
-if (method !== 'topics' && api !== 'systemone') {
-  console.error('Label-first scoring (--method categories) needs a decision model: --api systemone.');
-  process.exit(2);
-}
 const topics = priorities.map((p) => p.topic);
 
 const dataset = loadDataset(dataDir).filter((d) => Object.keys(d.labels).length > 0);
@@ -78,9 +72,6 @@ function progress(scorer) {
   }
 }
 
-// Label-first: the topic → category relevance table is asked once and reused.
-let relevance;
-
 async function scoreAll(scorer) {
   done = 0;
   const perPage = [];
@@ -95,11 +86,7 @@ async function scoreAll(scorer) {
     };
     let scores;
     if (scorer === 'lexical') scores = scoreLexical(blocks, topics);
-    else if (scorer === 'categories') {
-      const r = await scoreByCategories(settings, blocks, topics, fetch, { concurrency, onTiming, relevance });
-      relevance = r.relevance;
-      scores = r.scores;
-    } else scores = await scoreWithEndpoint(settings, blocks, topics, fetch, { concurrency, onTiming });
+    else scores = await scoreWithEndpoint(settings, blocks, topics, fetch, { concurrency, onTiming });
     perPage.push({ slug, labels, scores });
   }
   return { perPage, wallMs: performance.now() - t0, timings };
@@ -131,10 +118,9 @@ if (api !== 'lexical') {
     console.error(`Could not reach ${settings.endpoint} (${api}): ${err.message}`);
     process.exit(1);
   }
-  const methods = method === 'both' ? ['topics', 'categories'] : [method];
-  for (const m of methods) {
-    const id = m === 'categories' ? `${CATEGORIZE_SCORER_PREFIX}+${modelScorerId(settings)}` : modelScorerId(settings);
-    const res = await scoreAll(m === 'categories' ? 'categories' : 'model');
+  {
+    const id = modelScorerId(settings);
+    const res = await scoreAll('model');
     const unscored = res.perPage.reduce((n, p) => n + p.scores.filter((s) => s.unscored).length, 0);
     res.timings.sort((a, b) => a - b);
     const pct = (q) => Math.round(res.timings[Math.min(res.timings.length - 1, Math.floor(q * res.timings.length))] ?? 0);
@@ -142,8 +128,7 @@ if (api !== 'lexical') {
       scorer: id,
       timing: { wallMs: Math.round(res.wallMs), perBlockMedianMs: pct(0.5), perBlockP95Ms: pct(0.95), concurrency },
       unscored,
-      rows: evaluate(res, id),
-      ...(m === 'categories' ? { relevance } : {})
+      rows: evaluate(res, id)
     });
   }
 }
@@ -183,6 +168,7 @@ for (const run of runs) {
         p(r.rates.precision)
     );
   }
+  const at = atFor(run.scorer);
   const detail = run.rows.find((r) => r.threshold === at);
   console.log(`\n  Per page at ${p(at).trim()}: wanted-but-hidden / should-go-but-kept`);
   for (const pg of detail.pages) {
