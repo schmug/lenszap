@@ -26,12 +26,13 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder }, { toExample }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder }, { toExample }, { pauseScope, pauseLabel }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
       import(url('core/segment.js')),
-      import(url('core/train.js'))
+      import(url('core/train.js')),
+      import(url('core/pause.js'))
     ]);
   const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
   const host = location.hostname;
@@ -64,7 +65,9 @@
       weight: p.topic in draftWeights() ? draftWeights()[p.topic] : p.weight
     }));
   const threshold = () => preview.threshold ?? state.site.threshold ?? state.settings.threshold;
-  const paused = () => state.site.paused === true;
+  // Paused everywhere (settings) or on this site (sites[host]); either stops zapping.
+  const pausedBy = () => pauseScope(state.settings, state.site);
+  const paused = () => pausedBy() !== null;
   const pct = (x) => `${Math.round(x * 100)}%`;
 
   // --- Segmentation ----------------------------------------------------------
@@ -333,6 +336,7 @@
       modelError,
       ledgerFailure: !!ledgerFailure,
       paused: paused(),
+      pausedBy: pausedBy(),
       threshold: threshold(),
       before: ui.before,
       train: ui.train,
@@ -532,7 +536,7 @@
     const parts = [];
     let verdict;
     let cls;
-    if (paused()) [verdict, cls] = ['Paused on this site', 'muted'];
+    if (paused()) [verdict, cls] = [pauseLabel(pausedBy()), 'muted'];
     else if (active.has(id) || queue.includes(id)) [verdict, cls] = ['Scoring…', 'muted'];
     else if (!d) [verdict, cls] = [modelError ? 'Not scored (the model failed)' : 'Not scored yet', 'muted'];
     else if (d.zap) [verdict, cls] = ['Zapped', 'off'];
