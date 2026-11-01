@@ -70,21 +70,32 @@ for (const r of document.querySelectorAll('input[name="scorer"]')) {
   });
 }
 
-$('save-model').addEventListener('click', async () => {
+async function saveModel() {
   const model = { api: $('api').value, endpoint: $('endpoint').value.trim(), model: $('model').value.trim() };
   if (!isLoopbackEndpoint(model.endpoint)) {
     $('scorer-status').textContent = 'Refused: the endpoint must be on this machine (localhost or 127.0.0.1).';
-    return;
+    return false;
   }
   await send('set-settings', { patch: { model } });
-  $('scorer-status').textContent = 'Saved.';
+  return true;
+}
+
+$('save-model').addEventListener('click', async () => {
+  if (await saveModel()) $('scorer-status').textContent = 'Saved.';
 });
 
+// Test what is on screen, not what was last saved: saving first means the
+// test and the zapper always use the same settings.
 $('test-model').addEventListener('click', async () => {
-  $('scorer-status').textContent = 'Testing…';
+  if (!(await saveModel())) return;
+  $('scorer-status').textContent = 'Saved. Testing…';
   const r = await send('test-model');
   if (r.error) {
-    $('scorer-status').textContent = `Failed: ${r.error}`;
+    const hint =
+      $('api').value !== 'systemone' && /404/.test(r.error)
+        ? ' If this is llama-server running a decision model (Kev-4B, Clef-flash), choose the “Decision model via llama-server” API.'
+        : '';
+    $('scorer-status').textContent = `Failed: ${r.error}${hint}`;
     return;
   }
   const [a, b] = r.scores;
