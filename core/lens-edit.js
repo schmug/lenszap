@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Writes the reader's interest-slider changes back into their Lens Manifest as
-// one new version. This is the part of the zapper that does claim LensPub
+// Writes the reader's interest-slider changes, and their direct edits, back
+// into their Lens Manifest as one new version. This is the part of the zapper that does claim LensPub
 // conformance, as a Manifest Producer (spec/lenspub-protocol.md Section 7.1):
 // what it writes must validate, must follow version semantics, and must be
 // history-free, so the edited lens still works in any conforming engine.
@@ -98,16 +98,99 @@ export function draftChanges(manifest, draftWeights) {
 export async function commitDraft(manifest, draftWeights, { sha256, now = new Date() }) {
   const changes = draftChanges(manifest, draftWeights);
   if (changes.length === 0) return null;
-
-  const impact = changes.some((c) => c.impact === 'major') ? 'major' : 'minor';
   const next = structuredClone(manifest);
-  const dropped = [];
-
   for (const p of next.interpretation.priorities) {
     const c = changes.find((ch) => ch.topic === p.topic);
     if (c) p.weight = c.to;
   }
+  const impact = changes.some((c) => c.impact === 'major') ? 'major' : 'minor';
+  return { ...(await finishVersion(manifest, next, impact, sha256, now)), changes, impact };
+}
 
+const IMPACT_RANK = { trivial: 0, minor: 1, major: 2 };
+
+/**
+ * Every change between two versions of a lens, each with its impact class
+ * (spec/adaptation-model.md Section 4). Priorities are matched by topic, so a
+ * renamed topic is a removal plus an addition. Fields the tool sets itself
+ * (lensVersion, modified, versionHistory, proof, publisher) are ignored.
+ *
+ * - weight moved by at most 0.2: minor; more: major
+ * - priority added with |weight| at most 0.5: minor; larger: major
+ * - priority removed: major
+ * - anything under /interpretation/presentation only: trivial
+ * - anything else, including /privacy and /adaptation: major
+ */
+export function lensChanges(before, after) {
+  const changes = [];
+  const pb = new Map((before.interpretation?.priorities ?? []).map((p) => [p.topic, p]));
+  const pa = new Map((after.interpretation?.priorities ?? []).map((p) => [p.topic, p]));
+  for (const [topic, p] of pb) {
+    const q = pa.get(topic);
+    if (!q) {
+      changes.push({ path: '/interpretation/priorities', topic, op: 'remove', from: p.weight, impact: 'major' });
+      continue;
+    }
+    const { weight: w1, ...r1 } = p;
+    const { weight: w2, ...r2 } = q;
+    if (w1 !== w2) changes.push({ path: '/interpretation/priorities', topic, op: 'replace', from: w1, to: w2, impact: weightChangeImpact(w1, w2) });
+    if (canonicalize(r1) !== canonicalize(r2)) changes.push({ path: '/interpretation/priorities', topic, op: 'replace', field: 'domains', impact: 'major' });
+  }
+  for (const [topic, q] of pa) {
+    if (!pb.has(topic)) {
+      changes.push({ path: '/interpretation/priorities', topic, op: 'add', to: q.weight, impact: Math.abs(q.weight) <= 0.5 + 1e-9 ? 'minor' : 'major' });
+    }
+  }
+  const strip = (m) => {
+    const c = structuredClone(m ?? {});
+    delete c.proof;
+    delete c.versionHistory;
+    if (c.metadata) for (const k of ['lensVersion', 'modified', 'publisher']) delete c.metadata[k];
+    if (c.interpretation) delete c.interpretation.priorities;
+    return c;
+  };
+  const a = strip(before);
+  const b = strip(after);
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (key === 'interpretation') {
+      const ia = a.interpretation ?? {};
+      const ib = b.interpretation ?? {};
+      for (const k of new Set([...Object.keys(ia), ...Object.keys(ib)])) {
+        if (canonicalize(ia[k] ?? null) !== canonicalize(ib[k] ?? null)) {
+          changes.push({ path: `/interpretation/${k}`, op: k in ib ? (k in ia ? 'replace' : 'add') : 'remove', impact: k === 'presentation' ? 'trivial' : 'major' });
+        }
+      }
+    } else if (canonicalize(a[key] ?? null) !== canonicalize(b[key] ?? null)) {
+      changes.push({ path: `/${key}`, op: key in b ? (key in a ? 'replace' : 'add') : 'remove', impact: 'major' });
+    }
+  }
+  return changes;
+}
+
+/**
+ * Save an edited lens (the reader's own direct edit) as one new version.
+ * The version fields are the tool's to set: whatever the edit put in
+ * lensVersion, modified, or versionHistory is replaced.
+ *
+ * @returns {Promise<{manifest: object, changes: object[], impact: string, dropped: string[]} | null>}
+ *          null when the edit changes nothing.
+ */
+export async function commitEdit(manifest, edited, { sha256, now = new Date() }) {
+  if (!edited || typeof edited !== 'object' || Array.isArray(edited)) throw new Error('A lens must be a JSON object.');
+  const next = structuredClone(edited);
+  next.metadata = { ...(next.metadata ?? {}), lensVersion: manifest.metadata.lensVersion };
+  if (manifest.metadata.modified) next.metadata.modified = manifest.metadata.modified;
+  else delete next.metadata.modified;
+  if (manifest.versionHistory) next.versionHistory = manifest.versionHistory;
+  else delete next.versionHistory;
+  const changes = lensChanges(manifest, next);
+  if (changes.length === 0) return null;
+  const impact = changes.reduce((m, c) => (IMPACT_RANK[c.impact] > IMPACT_RANK[m] ? c.impact : m), 'trivial');
+  return { ...(await finishVersion(manifest, next, impact, sha256, now)), changes, impact };
+}
+
+async function finishVersion(manifest, next, impact, sha256, now) {
+  const dropped = [];
   const priorVersion = manifest.metadata.lensVersion;
   next.versionHistory = [
     ...(manifest.versionHistory ?? []),
@@ -129,7 +212,7 @@ export async function commitDraft(manifest, draftWeights, { sha256, now = new Da
 
   const errors = checkAgainstSchema(next, LENS_MANIFEST_SCHEMA);
   if (errors.length) throw new Error(`Edited lens would not validate: ${errors.join(' ')}`);
-  return { manifest: next, changes, impact, dropped };
+  return { manifest: next, dropped };
 }
 
 /**

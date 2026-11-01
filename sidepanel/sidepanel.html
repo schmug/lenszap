@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LensPub Zapper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header>
+    <div class="top">
+      <span class="title">⚡ Zapper</span>
+      <span id="count" class="count" aria-live="polite"></span>
+      <button id="before" title="Show the page as published, with zapped blocks outlined">Before</button>
+    </div>
+    <div id="progress" class="progress" hidden><div class="fill"></div></div>
+  </header>
+  <nav id="tabs" class="tabs" role="tablist" aria-label="Zapper sections"></nav>
+  <main id="body" class="body"></main>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

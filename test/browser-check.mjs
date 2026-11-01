@@ -49,28 +49,11 @@ if (!worker) worker = await context.waitForEvent('serviceworker');
 
 const page = await context.newPage();
 const cdp = await context.newCDPSession(page);
+const extId = new URL(worker.url()).host;
 
-// The panel lives in a closed shadow root, which page scripts (and Playwright
-// locators) cannot reach. CDP can: find a button by its text, click its centre.
-async function panelButton(text) {
-  const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
-  let found = null;
-  (function walk(n) {
-    if (found) return;
-    if (n.nodeName === 'BUTTON' && (n.children ?? []).some((c) => c.nodeType === 3 && c.nodeValue.trim() === text)) found = n;
-    for (const k of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(k);
-  })(root);
-  if (!found) throw new Error(`panel button not found: ${text}`);
-  return found.nodeId;
-}
-async function clickPanel(text) {
-  const nodeId = await panelButton(text);
-  const { model } = await cdp.send('DOM.getBoxModel', { nodeId });
-  const [x1, y1, , , x3, y3] = model.content;
-  await page.mouse.click((x1 + x3) / 2, (y1 + y3) / 2);
-}
-
-async function findPanelNode(test) {
+// The popover lives in a closed shadow root, which page scripts (and
+// Playwright locators) cannot reach. CDP can.
+async function findLayerNode(test) {
   const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
   let found = null;
   (function walk(n) {
@@ -81,10 +64,23 @@ async function findPanelNode(test) {
   return found;
 }
 const attrsOf = (n) => Object.fromEntries((n.attributes ?? []).reduce((acc, v, i, all) => (i % 2 ? acc : [...acc, [v, all[i + 1]]]), []));
+const textOf = (n) => (n.children ?? []).filter((c) => c.nodeType === 3).map((c) => c.nodeValue).join('').trim();
+async function clickLayerButton(text) {
+  const n = await findLayerNode((x) => x.nodeName === 'BUTTON' && textOf(x) === text);
+  if (!n) throw new Error(`popover button not found: ${text}`);
+  const { model } = await cdp.send('DOM.getBoxModel', { nodeId: n.nodeId });
+  const [x1, y1, , , x3, y3] = model.content;
+  await page.mouse.click((x1 + x3) / 2, (y1 + y3) / 2);
+}
+async function tipHtml() {
+  const n = await findLayerNode((x) => x.nodeName === 'DIV' && (attrsOf(x).class ?? '').split(' ').includes('tip'));
+  if (!n || 'hidden' in attrsOf(n)) return null;
+  return (await cdp.send('DOM.getOuterHTML', { nodeId: n.nodeId })).outerHTML;
+}
 
 // Scoring and zapping animate; wait until every block has settled.
 const settle = async () => {
-  await page.waitForFunction(() => !document.querySelector('[data-lpz-zapping], [data-lpz-scoring]'), null, { timeout: 15000 });
+  await page.waitForFunction(() => !document.querySelector('[data-lpz-zapping]'), null, { timeout: 15000 });
   await page.waitForTimeout(150);
 };
 
@@ -92,16 +88,27 @@ const zappedTexts = () =>
   page.$$eval('[data-lpz-zapped]', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim().slice(0, 50)));
 const isZapped = (needle) =>
   page.evaluate((n) => [...document.querySelectorAll('[data-lpz-zapped]')].some((e) => e.textContent.includes(n)), needle);
+const block = (needle) => `[data-lpz-id]:has-text(${JSON.stringify(needle)})`;
 
 await page.goto(pageUrl);
 await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
 await settle();
 
-// The sidebar docks on the right and the page makes room for it.
-assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).marginRight), '340px', 'page makes room for the sidebar');
+// The side panel: Chrome docks it and reflows the page. Headless Chromium
+// cannot show a side panel, so the check opens the same page in a tab, pinned
+// to the fixture's tab. Nothing is drawn into the page's own layout.
+await page.bringToFront();
+const [{ id: tabId }] = await worker.evaluate(() => chrome.tabs.query({ active: true, lastFocusedWindow: true }));
+const panel = await context.newPage();
+await panel.setViewportSize({ width: 380, height: 900 });
+await panel.goto(`chrome-extension://${extId}/sidepanel/sidepanel.html?tab=${tabId}`);
+await panel.waitForSelector('#count strong');
+assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).marginRight), '0px', 'the page layout is left to Chrome');
+const tab = (name) => panel.click(`.tabs button:text-is("${name}")`);
 
 const initial = await zappedTexts();
 console.log(`Hidden on load (${initial.length}):\n  ${initial.join('\n  ')}`);
+assert.equal(await panel.textContent('#count strong'), String(initial.length), 'panel shows the hidden count');
 
 for (const kept of ['ransomware attack', 'data privacy, asking', 'local-first software', 'plain-language data privacy']) {
   assert.equal(await isZapped(kept), false, `on-lens block kept: ${kept}`);
@@ -118,84 +125,141 @@ assert.equal(await isZapped('Correction:'), false, 'correction kept');
 assert.equal(await page.$$eval('h1[data-lpz-zapped], nav[data-lpz-zapped], form [data-lpz-zapped], form[data-lpz-zapped], [role=dialog][data-lpz-zapped]', (e) => e.length), 0);
 assert.equal(await page.isVisible('text=Correction: An earlier version'), true);
 assert.equal(await page.isVisible('text=mild weekend'), false, 'zapped block is not displayed');
-if (shots) await page.screenshot({ path: join(shots, 'after.jpg'), quality: 80 });
+if (shots) {
+  await page.screenshot({ path: join(shots, 'after.jpg'), quality: 80 });
+  await panel.screenshot({ path: join(shots, 'panel-ledger.jpg'), quality: 85 });
+}
 
 // Before/After shows the page as published, with zaps outlined.
-await clickPanel('Before');
+await panel.click('#before');
+await page.waitForTimeout(100);
 assert.equal(await page.isVisible('text=mild weekend'), true, 'Before shows zapped blocks');
 if (shots) await page.screenshot({ path: join(shots, 'before.jpg'), quality: 80 });
-await clickPanel('After');
+await panel.click('#before');
+await page.waitForTimeout(100);
 assert.equal(await page.isVisible('text=mild weekend'), false);
 
 // Hovering a kept block shows its score and why it was kept.
 await page.hover('p:has-text("student information system is back online")');
 await page.waitForTimeout(400);
-const tipNode = await findPanelNode((n) => n.nodeName === 'DIV' && attrsOf(n).class === 'tip');
-assert.ok(tipNode && !('hidden' in attrsOf(tipNode)), 'hover popover shown');
-const tipHtml = (await cdp.send('DOM.getOuterHTML', { nodeId: tipNode.nodeId })).outerHTML;
-assert.match(tipHtml, /Kept/, 'popover says the block was kept');
-assert.match(tipHtml, /off-lens/, 'popover shows the off-lens score');
-assert.match(tipHtml, /school cybersecurity/, 'popover lists topic matches');
+const tipShown = await tipHtml();
+assert.ok(tipShown, 'hover popover shown');
+assert.match(tipShown, /Kept/, 'popover says the block was kept');
+assert.match(tipShown, /off-lens/, 'popover shows the off-lens score');
+assert.match(tipShown, /school cybersecurity/, 'popover lists topic matches');
 if (shots) await page.screenshot({ path: join(shots, 'hover.jpg'), quality: 80 });
 await page.mouse.move(5, 5);
 
-// Show restores one block on this page.
-const showButtons = await (async () => {
-  const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
-  let n = 0;
-  (function walk(x) {
-    if (x.nodeName === 'BUTTON' && (x.children ?? []).some((c) => c.nodeType === 3 && c.nodeValue.trim() === 'Show')) n++;
-    for (const k of [...(x.children ?? []), ...(x.shadowRoots ?? [])]) walk(k);
-  })(root);
-  return n;
-})();
-assert.equal(showButtons, initial.length, 'ledger lists every hidden block');
-await clickPanel('Show');
-await page.waitForTimeout(100);
+// Show restores one block on this page; every hidden block is listed.
+assert.equal(await panel.locator('li.entry button:text-is("Show")').count(), initial.length, 'ledger lists every hidden block');
+await panel.locator('li.entry button:text-is("Show")').first().click();
+await panel.mouse.move(370, 5); // off the list, so it refreshes
+await page.waitForTimeout(300);
 assert.equal((await zappedTexts()).length, initial.length - 1, 'Show restored one block');
 
 // The confidence slider re-decides the page while it moves, with no reload.
-await clickPanel('Interests');
-const confNode = await findPanelNode((n) => n.nodeName === 'INPUT' && (attrsOf(n)['aria-label'] ?? '').startsWith('Zap when'));
-await cdp.send('DOM.focus', { nodeId: confNode.nodeId });
+await tab('Interests');
+await panel.focus('input[aria-label^="Zap when"]');
 const beforeSlide = (await zappedTexts()).length;
-await page.keyboard.press('End'); // 99%: only blocks the scorer is all but certain about
+await panel.keyboard.press('End'); // 99%
 await settle();
 const atTop = (await zappedTexts()).length;
-await page.keyboard.press('Home'); // 50%
+await panel.keyboard.press('Home'); // 50%
 await settle();
 const atBottom = (await zappedTexts()).length;
 console.log(`live threshold: ${beforeSlide} hidden at 80%, ${atTop} at 99%, ${atBottom} at 50%`);
 assert.ok(atBottom > atTop, 'moving the confidence slider changes what is hidden right away');
-await page.keyboard.press('PageUp'); // leave it near where it was
-await page.evaluate(() => 0);
+for (let i = 0; i < 30; i++) await panel.keyboard.press('ArrowRight'); // back to 80%
+await page.waitForTimeout(800);
 
 // Interests: raise "celebrity gossip" from -0.5 toward 0 with the keyboard, then save.
-const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
-let rangeId = null;
-(function walk(x) {
-  if (x.nodeName === 'INPUT' && (x.attributes ?? []).join('|').includes('aria-label|celebrity gossip')) rangeId = x.nodeId;
-  for (const k of [...(x.children ?? []), ...(x.shadowRoots ?? [])]) walk(k);
-})(root);
-assert.ok(rangeId, 'celebrity gossip slider present');
-await cdp.send('DOM.focus', { nodeId: rangeId });
-for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight'); // -0.5 → -0.3
+await panel.focus('input[aria-label="celebrity gossip"]');
+for (let i = 0; i < 4; i++) await panel.keyboard.press('ArrowRight'); // -0.5 → -0.3
 await page.waitForTimeout(200);
-if (shots) await page.screenshot({ path: join(shots, 'interests.jpg'), quality: 80 });
-await clickPanel('Save to lens');
+if (shots) await panel.screenshot({ path: join(shots, 'panel-interests.jpg'), quality: 85 });
+await panel.click('button:text-is("Save to lens")');
 await page.waitForTimeout(400);
-const { lens, draftWeights } = await worker.evaluate(() => chrome.storage.local.get(['lens', 'draftWeights']));
+let { lens, draftWeights, settings } = await worker.evaluate(() => chrome.storage.local.get(['lens', 'draftWeights', 'settings']));
 const gossip = lens.interpretation.priorities.find((p) => p.topic === 'celebrity gossip');
 assert.equal(gossip.weight, -0.3);
 assert.equal(lens.metadata.lensVersion, '1.5.0', 'a 0.2 change is minor: MINOR bump');
 assert.deepEqual(Object.keys(lens.versionHistory.at(-1)).sort(), ['hash', 'lensVersion']);
 assert.deepEqual(draftWeights, {});
+assert.equal(settings.threshold, 0.8, 'threshold slider stored');
+
+// Lens: add an interest directly, see its impact, save it as a new version.
+await tab('Lens');
+await panel.fill('input[aria-label="New interest"]', 'open data');
+await panel.fill('input[aria-label="Weight for the new interest"]', '0.4');
+await panel.click('.prio button:text-is("Add")');
+assert.match(await panel.textContent('.changes'), /Add “open data”.*minor/);
+if (shots) await panel.screenshot({ path: join(shots, 'panel-lens.jpg'), quality: 85 });
+await panel.click('button:text-is("Save new version")');
+await panel.waitForSelector('.ok:has-text("Saved as version 1.6.0")');
+({ lens } = await worker.evaluate(() => chrome.storage.local.get(['lens'])));
+assert.ok(lens.interpretation.priorities.some((p) => p.topic === 'open data' && p.weight === 0.4));
+assert.equal(lens.metadata.lensVersion, '1.6.0', 'a small new interest is minor');
+// Removing one is major.
+await panel.click('button[aria-label="Remove open data"]');
+await panel.click('button:text-is("Save new version")');
+await panel.waitForSelector('.ok:has-text("Saved as version 2.0.0")');
+// The JSON editor rejects a document that is not a lens.
+await panel.click('summary:text-is("Edit as JSON")');
+await panel.fill('textarea.json', '{"not": "a lens"}');
+await panel.click('button:text-is("Save JSON as new version")');
+await panel.waitForSelector('.error:has-text("Not saved")');
+({ lens } = await worker.evaluate(() => chrome.storage.local.get(['lens'])));
+assert.equal(lens.metadata.lensVersion, '2.0.0', 'an invalid edit changes nothing');
 const local = await worker.evaluate(() => chrome.storage.local.get(null));
 assert.ok(!JSON.stringify(local.lens).includes('127.0.0.1'), 'lens holds no trace of the page');
+await settle();
+
+// Train: mark blocks Keep or Zap on the page, get a suggestion in the panel.
+await tab('Train');
+await panel.click('button:text-is("Start training on this page")');
+await page.waitForTimeout(200);
+assert.equal(await page.isVisible('text=mild weekend'), true, 'training shows zapped blocks');
+const marks = [
+  ['incident report', 'Keep'],
+  ['student information system is back online', 'Keep'],
+  ['mild weekend', 'Zap'],
+  ['spring musical', 'Zap'],
+  ['Pop star spotted', 'Zap'],
+  ['Otters beat', 'Zap']
+];
+for (const [needle, choice] of marks) {
+  await page.click(block(needle), { position: { x: 5, y: 5 } });
+  await page.waitForTimeout(100);
+  await clickLayerButton(choice);
+  await page.waitForTimeout(150);
+}
+assert.equal(await page.url(), pageUrl, 'clicks in training mode do not follow links');
+const { training } = await worker.evaluate(() => chrome.storage.local.get(['training']));
+assert.equal(training.length, marks.length, 'every mark stored');
+for (const ex of training) assert.deepEqual(Object.keys(ex).sort(), ['label', 'matches'], 'a mark holds scores and a label only');
+assert.ok(!JSON.stringify(training).includes('weekend'), 'no page text in training marks');
+await panel.waitForSelector('.suggest');
+const suggestion = await panel.textContent('.suggest');
+console.log(`training suggestion: ${suggestion.replace(/\s+/g, ' ').slice(0, 200)}`);
+assert.match(suggestion, /Now: 1 of 6 wrong/, 'the lexical false zap is counted');
+assert.match(suggestion, /matched none of your interests/, 'and explained: it needs a new interest');
+if (shots) {
+  await page.screenshot({ path: join(shots, 'train.jpg'), quality: 80 });
+  await panel.screenshot({ path: join(shots, 'panel-train.jpg'), quality: 85 });
+}
+await panel.click('button:text-is("Stop training on this page")');
+await panel.click('button:text-is("Clear all marks")');
+await panel.waitForTimeout(200);
+
+// Settings live in the panel too.
+await tab('Settings');
+assert.ok(await panel.isVisible('text=Show the score when I hover over a block'));
+if (shots) await panel.screenshot({ path: join(shots, 'panel-settings.jpg'), quality: 85 });
 
 // --- Site rule: table-row stories are one block each -------------------------
 await context.route('https://news.ycombinator.com/**', (route) =>
   route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: linkTable }));
+await panel.close();
 await page.goto('https://news.ycombinator.com/');
 await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
 await settle();
@@ -281,9 +345,15 @@ for (const api of ['systemone', 'openai', 'ollama']) {
   modelCalls = 0;
   maxInFlight = 0;
   await page.reload();
-  if (shots && api === 'systemone') {
-    await page.waitForSelector('[data-lpz-scoring="active"]', { state: 'attached' });
-    await page.screenshot({ path: join(shots, 'scoring.jpg'), quality: 80 });
+  if (api === 'systemone') {
+    // While the model works, a spark races round each block being scored.
+    let spark = null;
+    for (let i = 0; i < 40 && !spark; i++) {
+      spark = await findLayerNode((x) => x.nodeName === 'svg' && attrsOf(x).class === 'spark').catch(() => null);
+      if (!spark) await page.waitForTimeout(25);
+    }
+    assert.ok(spark, 'scoring spark drawn on the layer while the model works');
+    if (shots) await page.screenshot({ path: join(shots, 'scoring.jpg'), quality: 80 });
   }
   await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
   await settle();

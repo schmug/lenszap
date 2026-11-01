@@ -8,7 +8,8 @@
 //   draftWeights interest-slider positions not yet saved into the lens
 //   settings     confidence threshold and scorer choice
 //   sites        per-site pause and threshold, keyed by hostname
-// Only `lens` is ever exported. draftWeights and sites are Adaptation State in
+//   training     the reader's Keep/Zap marks: scores only, no text, no URLs
+// Only `lens` is ever exported. draftWeights, sites, and training are Adaptation State in
 // the protocol's sense (ADR-0006): local, private, and never written into the
 // manifest, because a hostname next to a preference is reading history.
 //
@@ -19,7 +20,7 @@
 // leaves the device. The other fetch() here loads the bundled sample lens
 // from the extension's own package.
 
-import { commitDraft, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
+import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 
 const DEFAULT_SETTINGS = {
@@ -50,6 +51,7 @@ async function load() {
 }
 
 const sha256 = (bytes) => crypto.subtle.digest('SHA-256', bytes);
+const TRAINING_LIMIT = 500;
 
 // Model scores cached for the life of the service worker, keyed by model,
 // topics, and block text. Never persisted: the cache holds page text.
@@ -137,6 +139,50 @@ const handlers = {
     };
   },
 
+  async 'commit-edit'({ manifest: edited }) {
+    const { lens } = await load();
+    const result = await commitEdit(lens, edited, { sha256 });
+    if (!result) return { unchanged: true };
+    // A direct edit starts from the saved weights, so unsaved slider moves go.
+    await chrome.storage.local.set({ lens: result.manifest, draftWeights: {} });
+    return {
+      lensVersion: result.manifest.metadata.lensVersion,
+      impact: result.impact,
+      changes: result.changes,
+      dropped: result.dropped
+    };
+  },
+
+  async 'train-add'({ example }) {
+    // Only numbers for known topics and the label; anything else is dropped.
+    if (!example || !['keep', 'zap'].includes(example.label) || typeof example.matches !== 'object') return { error: 'bad example' };
+    const matches = {};
+    for (const [t, m] of Object.entries(example.matches)) if (typeof m === 'number') matches[t] = m;
+    const { training = [] } = await chrome.storage.local.get('training');
+    training.push({ matches, label: example.label });
+    await chrome.storage.local.set({ training: training.slice(-TRAINING_LIMIT) });
+    return { count: Math.min(training.length, TRAINING_LIMIT) };
+  },
+
+  async 'train-get'() {
+    const { training = [] } = await chrome.storage.local.get('training');
+    return { examples: training };
+  },
+
+  async 'train-clear'() {
+    await chrome.storage.local.remove('training');
+    return { ok: true };
+  },
+
+  // From a page: the zapped count goes on the toolbar badge for that tab.
+  async 'page-update'({ page }, sender) {
+    const tabId = sender?.tab?.id;
+    if (tabId == null) return { ok: false };
+    const n = page?.zapped?.length ?? 0;
+    await chrome.action.setBadgeText({ tabId, text: page?.paused ? '‖' : n ? String(n) : '' });
+    return { ok: true };
+  },
+
   async 'import-lens'({ manifest }) {
     const errors = validateLens(manifest);
     if (errors.length) return { errors };
@@ -150,7 +196,7 @@ const handlers = {
   },
 
   async 'clear-local-state'() {
-    await chrome.storage.local.remove(['draftWeights', 'sites']);
+    await chrome.storage.local.remove(['draftWeights', 'sites', 'training']);
     scoreCache.clear();
     return { ok: true };
   },
@@ -169,21 +215,18 @@ const handlers = {
       ['school cybersecurity']
     );
     return { scorer, ms: Date.now() - t0, scores };
-  },
-
-  async 'open-options'() {
-    await chrome.runtime.openOptionsPage();
-    return { ok: true };
   }
 };
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = handlers[msg?.type];
   if (!handler) return false;
-  handler(msg)
+  handler(msg, sender)
     .then(sendResponse)
     .catch((err) => sendResponse({ error: String(err?.message ?? err) }));
   return true;
 });
 
-chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+// The toolbar button opens the side panel, where all the controls are.
+chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.action.setBadgeBackgroundColor({ color: '#c62828' }).catch(() => {});

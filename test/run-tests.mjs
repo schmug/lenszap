@@ -23,6 +23,8 @@ import {
   weightChangeImpact,
   draftChanges,
   commitDraft,
+  commitEdit,
+  lensChanges,
   validateLens,
   unsupportedFeatures
 } from '../core/lens-edit.js';
@@ -38,6 +40,7 @@ import {
   modelScorerId
 } from '../core/model-scorer.js';
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
+import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES } from '../core/segment.js';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -428,6 +431,94 @@ await test('scoringOrder: on screen top to bottom, then below nearest first, the
     vh
   );
   assert.deepEqual(order, ['partly-visible', 'visible-2', 'below-near', 'below-far', 'above-near', 'above-far']);
+});
+
+await test('lensChanges classifies edits by the Adaptation Model rules', () => {
+  const edit = structuredClone(sampleLens);
+  const ps = edit.interpretation.priorities;
+  ps.find((p) => p.topic === 'data privacy').weight = 0.7; // minor
+  ps.push({ topic: 'open data', weight: 0.4 }); // added, small: minor
+  let c = lensChanges(sampleLens, edit);
+  assert.deepEqual(c.map((x) => [x.topic, x.op, x.impact]), [['data privacy', 'replace', 'minor'], ['open data', 'add', 'minor']]);
+  ps.splice(ps.findIndex((p) => p.topic === 'celebrity gossip'), 1); // removal: major
+  ps.push({ topic: 'chess', weight: 0.9 }); // added, large: major
+  c = lensChanges(sampleLens, edit);
+  assert.ok(c.find((x) => x.topic === 'celebrity gossip' && x.op === 'remove' && x.impact === 'major'));
+  assert.ok(c.find((x) => x.topic === 'chess' && x.impact === 'major'));
+  const pres = structuredClone(sampleLens);
+  pres.interpretation.presentation = { density: 'compact' };
+  assert.deepEqual(lensChanges(sampleLens, pres).map((x) => [x.path, x.impact]), [['/interpretation/presentation', 'trivial']]);
+  const meta = structuredClone(sampleLens);
+  meta.metadata.lensVersion = '9.9.9';
+  meta.metadata.modified = '2030-01-01T00:00:00Z';
+  assert.deepEqual(lensChanges(sampleLens, meta), [], 'version fields are not the reader\'s edit');
+});
+
+await test('commitEdit: a direct edit becomes one valid version; version fields are the tool\'s', async () => {
+  assert.equal(await commitEdit(sampleLens, structuredClone(sampleLens), { sha256 }), null);
+  const edit = structuredClone(sampleLens);
+  edit.interpretation.priorities.push({ topic: 'open data', weight: 0.4 });
+  edit.metadata.lensVersion = '42.0.0';
+  edit.versionHistory = [];
+  const r = await commitEdit(sampleLens, edit, { sha256, now: new Date('2026-11-01T19:40:12Z') });
+  assert.equal(r.impact, 'minor');
+  assert.equal(r.manifest.metadata.lensVersion, bumpVersion(sampleLens.metadata.lensVersion, 'minor'));
+  assert.equal(r.manifest.versionHistory.length, (sampleLens.versionHistory ?? []).length + 1);
+  assert.equal(r.manifest.metadata.modified, '2026-11-01T00:00:00Z');
+  assert.ok(ajvValidateLens(r.manifest), JSON.stringify(ajvValidateLens.errors));
+  const bad = structuredClone(sampleLens);
+  bad.interpretation.priorities[0].weight = 3;
+  await assert.rejects(commitEdit(sampleLens, bad, { sha256 }), /would not validate/);
+  await assert.rejects(commitEdit(sampleLens, [], { sha256 }), /JSON object/);
+});
+
+await test('train: needs a few examples before suggesting', () => {
+  const pr = [{ topic: 'a', weight: 0.8 }];
+  assert.deepEqual(suggest([{ matches: { a: 1 }, label: 'keep' }], pr, 0.8), { needMore: MIN_EXAMPLES - 1 });
+});
+
+await test('train: suggests a lower threshold when the reader marks mild off-lens blocks Zap', () => {
+  const pr = [{ topic: 'a', weight: 1 }];
+  // offLens = 1 - match. Zap labels at 0.6–0.7 off-lens are missed at 80%.
+  const ex = [
+    ...[0.95, 0.9, 0.85].map((m) => ({ matches: { a: m }, label: 'keep' })),
+    ...[0.4, 0.35, 0.3, 0.1].map((m) => ({ matches: { a: m }, label: 'zap' }))
+  ];
+  const s = suggest(ex, pr, 0.8);
+  assert.equal(s.before.missed, 3);
+  assert.equal(s.after.wrong, 0);
+  assert.ok(s.threshold <= 0.6 && s.threshold > 0.15, `threshold ${s.threshold}`);
+  assert.deepEqual(s.changes, [], 'no weight change needed');
+});
+
+await test('train: suggests raising an interest the reader keeps', () => {
+  const pr = [{ topic: 'a', weight: 0.9 }, { topic: 'b', weight: 0.2 }];
+  // Blocks strongly about b are kept by the reader but zapped at weight 0.2.
+  const ex = [
+    ...Array.from({ length: 4 }, () => ({ matches: { a: 0, b: 0.95 }, label: 'keep' })),
+    ...Array.from({ length: 3 }, () => ({ matches: { a: 0.95, b: 0 }, label: 'keep' })),
+    // Mildly about a, and the reader wants them gone: no threshold alone separates these
+    // from the b blocks, so only a higher weight for b fixes both.
+    ...Array.from({ length: 4 }, () => ({ matches: { a: 0.25, b: 0 }, label: 'zap' }))
+  ];
+  const s = suggest(ex, pr, 0.8);
+  assert.equal(s.before.falseZaps, 4);
+  assert.equal(s.after.wrong, 0);
+  const b = s.changes.find((c) => c.topic === 'b');
+  assert.ok(b && b.to > 0.2, JSON.stringify(s.changes));
+  assert.ok(!s.changes.find((c) => c.topic === 'a'), 'leaves the interest that was not the problem');
+  assert.equal(s.unmatched, 0);
+  const lost = suggest([...ex, { matches: { a: 0, b: 0 }, label: 'keep' }], pr, 0.8);
+  assert.equal(lost.unmatched, 1, 'a kept block matching nothing is reported, not fitted');
+});
+
+await test('train: toExample keeps numbers only, and skips evidence and unscored blocks', () => {
+  const ex = toExample({ id: 'b1', matches: { a: 0.12345, z: 0.9 }, text: 'secret' }, 'zap', ['a', 'b']);
+  assert.deepEqual(ex, { matches: { a: 0.123, b: 0 }, label: 'zap' });
+  assert.equal(toExample({ matches: { a: 1 }, evidence: true }, 'keep', ['a']), null);
+  assert.equal(toExample({ unscored: true }, 'keep', ['a']), null);
+  assert.equal(toExample({ matches: { a: 1 } }, 'maybe', ['a']), null);
+  assert.deepEqual(evalTraining([ex], [{ topic: 'a', weight: 1 }], 0.8), { falseZaps: 0, missed: 0, wrong: 0, total: 1 });
 });
 
 console.log(`zapper: ${passed} passed, ${failed} failed`);

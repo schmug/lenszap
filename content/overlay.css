@@ -1,0 +1,58 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Styles for the zapper's on-page layer (hover popover, scoring sparks),
+ * loaded into its closed shadow root so neither the page nor the layer can
+ * restyle the other. The controls themselves are in the side panel.
+ */
+:host { all: initial; }
+.tip { font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; box-sizing: border-box; }
+.tip * { box-sizing: border-box; }
+
+/* Scoring spark: a bright dash racing round the block, over a faint track. */
+.sparks { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.spark { position: absolute; left: 0; top: 0; overflow: visible; }
+.spark rect { fill: none; }
+.spark .track { stroke: rgba(90, 170, 255, 0.22); stroke-width: 1; }
+.spark .run {
+  stroke: #8fd3ff; stroke-width: 2; stroke-linecap: round;
+  stroke-dasharray: 9 91; filter: drop-shadow(0 0 3px rgba(120, 200, 255, 0.95));
+  animation: lpz-race 1.3s linear infinite;
+}
+.spark .run.trail { stroke: rgba(200, 235, 255, 0.55); stroke-width: 1; stroke-dasharray: 3 97; filter: none; animation-delay: -0.08s; }
+@keyframes lpz-race { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
+@media (prefers-reduced-motion: reduce) { .spark .run { animation: none; } }
+
+/* Hover popover: score and reason for one block. */
+.tip {
+  position: fixed; z-index: 1; width: 300px; padding: 10px 12px; pointer-events: none;
+  background: #1d1f27; color: #eef0f6; border-radius: 10px; font-size: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(140, 200, 255, 0.25);
+}
+.tip[hidden] { display: none; }
+.tip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tip .big { font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.pill { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 999px; }
+.pill.off { background: #ff5a5a; color: #fff; }
+.pill.on { background: #43b06a; color: #fff; }
+.pill.muted { background: #4a4f60; color: #dfe3ee; }
+.meter { position: relative; height: 6px; background: #3a3e4c; border-radius: 3px; margin: 4px 0 2px; }
+.meter .fill { position: absolute; left: 0; top: 0; bottom: 0; background: #43b06a; border-radius: 3px; }
+.meter .fill.off { background: #ff5a5a; }
+.meter .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #fff; }
+.tip-note { color: #a9b0c2; font-size: 11px; margin-bottom: 6px; }
+.matches { width: 100%; border-collapse: collapse; margin: 4px 0 6px; }
+.matches td { padding: 1px 0; }
+.matches .topic { color: #dfe3ee; }
+.matches .num { text-align: right; font-variant-numeric: tabular-nums; padding-left: 8px; white-space: nowrap; }
+.matches .w { color: #8fd19e; }
+.matches .w.neg { color: #ff8a8a; }
+.tip .why { color: #a9b0c2; font-size: 11px; }
+
+/* Training: pinned popover with Keep and Zap. */
+.tip.pinned { pointer-events: auto; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 0 0 2px #8fd3ff; }
+.train { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #3a3e4c; }
+.train span { flex: 1; color: #dfe3ee; }
+.train button { font: inherit; font-weight: 650; border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; color: #fff; }
+.train .keep { background: #43b06a; }
+.train .zap { background: #ff5a5a; }
+.train .skip { background: #4a4f60; }
+.train button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }

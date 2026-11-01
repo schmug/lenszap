@@ -16,45 +16,24 @@ html.lpz-before [data-lpz-zapping] {
   background-color: rgba(198, 40, 40, 0.07) !important;
 }
 
-/* The sidebar docks to the right and the page makes room for it. */
-html.lpz-docked { margin-right: 340px !important; }
-html.lpz-docked-min { margin-right: 44px !important; }
-
 /* Hovered block: the popover beside it explains the decision. */
 [data-lpz-hover] {
   outline: 1px solid rgba(58, 91, 217, 0.55) !important;
   outline-offset: 2px !important;
 }
 
-/* Waiting for the model. */
-[data-lpz-scoring="queued"] {
-  outline: 1px dotted rgba(90, 170, 255, 0.45) !important;
-  outline-offset: 2px !important;
+/* Training mode: every block is a target; marked blocks show their label. */
+html.lpz-train [data-lpz-id] { cursor: crosshair !important; }
+html.lpz-train [data-lpz-label="keep"] {
+  outline: 2px solid #2e9b57 !important; outline-offset: 2px !important;
+  background-color: rgba(46, 155, 87, 0.07) !important;
+}
+html.lpz-train [data-lpz-label="zap"] {
+  outline: 2px solid #d63b3b !important; outline-offset: 2px !important;
+  background-color: rgba(214, 59, 59, 0.09) !important;
 }
 
-/* Being scored: static electricity crackles round the block. */
-[data-lpz-scoring="active"] {
-  outline: 1px dashed rgba(110, 190, 255, 0.9) !important;
-  outline-offset: 2px !important;
-  animation: lpz-static 0.42s steps(1, end) infinite !important;
-}
-
-@keyframes lpz-static {
-  0%   { outline-color: rgba(110, 190, 255, 0.9); outline-style: dashed;
-         box-shadow: 0 0 6px 1px rgba(110, 190, 255, 0.55), inset 0 0 8px rgba(110, 190, 255, 0.25); }
-  17%  { outline-color: rgba(235, 248, 255, 1); outline-style: dotted;
-         box-shadow: 2px -1px 11px 2px rgba(160, 220, 255, 0.85), inset 0 0 3px rgba(110, 190, 255, 0.15); }
-  33%  { outline-color: rgba(70, 140, 255, 0.6); outline-style: dashed;
-         box-shadow: -2px 1px 4px 0 rgba(110, 190, 255, 0.4), inset 1px 0 10px rgba(110, 190, 255, 0.3); }
-  50%  { outline-color: rgba(190, 235, 255, 0.95); outline-style: dotted;
-         box-shadow: 1px 2px 14px 3px rgba(130, 205, 255, 0.7), inset 0 0 6px rgba(110, 190, 255, 0.2); }
-  67%  { outline-color: rgba(110, 190, 255, 0.75); outline-style: dashed;
-         box-shadow: -1px -2px 7px 1px rgba(110, 190, 255, 0.5), inset -1px 0 9px rgba(110, 190, 255, 0.28); }
-  83%  { outline-color: rgba(255, 255, 255, 1); outline-style: dotted;
-         box-shadow: 0 0 16px 4px rgba(170, 225, 255, 0.9), inset 0 0 4px rgba(110, 190, 255, 0.2); }
-}
-
-/* Zapped: a bright crackle, then the block collapses and vanishes. */
+/* Zapped: a bright flash, then the block collapses and vanishes. */
 html:not(.lpz-before) [data-lpz-zapping] {
   animation: lpz-zap 0.65s ease-in forwards !important;
   pointer-events: none !important;
@@ -91,5 +70,5 @@ html:not(.lpz-before) [data-lpz-zapping] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-lpz-scoring="active"], [data-lpz-zapping], [data-lpz-unzap] { animation: none !important; }
+  [data-lpz-zapping], [data-lpz-unzap] { animation: none !important; }
 }
