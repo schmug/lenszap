@@ -180,6 +180,30 @@ await test('checkLedger: detects unlisted and phantom zaps', () => {
   assert.deepEqual(checkLedger(['a', 'c'], ['a', 'b']), { ok: false, unlisted: ['c'], phantom: ['b'] });
 });
 
+// --- Pause: browser-wide and per site ---------------------------------------
+
+await test('pause: browser-wide and per-site pauses are independent', () => {
+  assert.equal(pauseScope({}, {}), null);
+  assert.equal(pauseScope({ paused: true }, {}), 'everywhere');
+  assert.equal(pauseScope({}, { paused: true }), 'site');
+  assert.equal(pauseScope({ paused: true }, { paused: true }), 'both');
+  assert.equal(pauseScope({ paused: false }, undefined), null);
+  assert.equal(pauseLabel('everywhere'), 'Paused everywhere');
+  assert.equal(pauseLabel(null), '');
+});
+
+await test('pause: the toolbar badge says paused, and why, instead of a count', () => {
+  assert.deepEqual(badgeFor({ zapped: [1, 2, 3] }).text, '3');
+  assert.equal(badgeFor({ zapped: [] }).text, '');
+  const all = badgeFor({ paused: true, pausedBy: 'everywhere', zapped: [] });
+  assert.equal(all.text, '‖');
+  assert.match(all.title, /paused everywhere/);
+  assert.match(badgeFor({ paused: true, pausedBy: 'site', zapped: [] }).title, /paused on this site/);
+  assert.notEqual(all.color, badgeFor({ zapped: [1] }).color, 'paused is not drawn in the zap colour');
+  assert.equal(badgeFor(null, true).text, '‖', 'pages the zapper cannot run on still show a browser-wide pause');
+  assert.equal(badgeFor(null, false).text, '');
+});
+
 // --- Lens editing (Manifest Producer duties) --------------------------------
 
 await test('canonicalize: sorted keys, no whitespace, RFC 8785 numbers', () => {
@@ -535,30 +559,6 @@ await test('train: toExample keeps numbers only, and skips evidence and unscored
   assert.equal(toExample({ unscored: true }, 'keep', ['a']), null);
   assert.equal(toExample({ matches: { a: 1 } }, 'maybe', ['a']), null);
   assert.deepEqual(evalTraining([ex], [{ topic: 'a', weight: 1 }], 0.8), { falseZaps: 0, missed: 0, wrong: 0, total: 1 });
-});
-
-// --- Pause: browser-wide and per site ---------------------------------------
-
-await test('pause: browser-wide and per-site pauses are independent', () => {
-  assert.equal(pauseScope({}, {}), null);
-  assert.equal(pauseScope({ paused: true }, {}), 'everywhere');
-  assert.equal(pauseScope({}, { paused: true }), 'site');
-  assert.equal(pauseScope({ paused: true }, { paused: true }), 'both');
-  assert.equal(pauseScope({ paused: false }, undefined), null);
-  assert.equal(pauseLabel('everywhere'), 'Paused everywhere');
-  assert.equal(pauseLabel(null), '');
-});
-
-await test('pause: the toolbar badge says paused, and why, instead of a count', () => {
-  assert.deepEqual(badgeFor({ zapped: [1, 2, 3] }).text, '3');
-  assert.equal(badgeFor({ zapped: [] }).text, '');
-  const all = badgeFor({ paused: true, pausedBy: 'everywhere', zapped: [] });
-  assert.equal(all.text, '‖');
-  assert.match(all.title, /paused everywhere/);
-  assert.match(badgeFor({ paused: true, pausedBy: 'site', zapped: [] }).title, /paused on this site/);
-  assert.notEqual(all.color, badgeFor({ zapped: [1] }).color, 'paused is not drawn in the zap colour');
-  assert.equal(badgeFor(null, true).text, '‖', 'pages the zapper cannot run on still show a browser-wide pause');
-  assert.equal(badgeFor(null, false).text, '');
 });
 
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
