@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Repository guards that don't belong to any one module.
+// Run:  npm test   (or: node test/repo-checks.mjs)
+//
+// - manifest.json and package.json carry the same version;
+// - the manifest asks for no host access beyond loopback (the "local only" rule);
+// - every code file carries an SPDX-License-Identifier header.
+
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const readJson = (p) => JSON.parse(readFileSync(join(root, p), 'utf8'));
+
+let passed = 0;
+let failed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    passed++;
+  } catch (err) {
+    failed++;
+    console.error(`FAIL ${name}\n  ${err.message}`);
+  }
+}
+
+const manifest = readJson('manifest.json');
+const pkg = readJson('package.json');
+
+test('manifest.json and package.json versions match', () => {
+  assert.equal(manifest.version, pkg.version, 'bump both together');
+});
+
+test('manifest host permissions are loopback only', () => {
+  const allowed = new Set(['http://localhost/*', 'http://127.0.0.1/*', 'http://[::1]/*']);
+  for (const host of manifest.host_permissions ?? []) {
+    assert.ok(allowed.has(host), `host permission ${host} is not loopback`);
+  }
+  assert.equal(manifest.optional_host_permissions, undefined, 'no optional host permissions');
+});
+
+// Code files only; upstream/ holds verbatim LensPub copies, eval/data/ holds captures.
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'upstream']);
+const SKIP_PATHS = new Set(['eval/data']);
+const CODE = /\.(m?js|css|html)$/;
+
+function* codeFiles(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    const rel = relative(root, full).split('\\').join('/');
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name) && !SKIP_PATHS.has(rel)) yield* codeFiles(full);
+    } else if (CODE.test(entry.name)) {
+      yield rel;
+    }
+  }
+}
+
+test('every code file has an SPDX-License-Identifier header', () => {
+  const missing = [];
+  for (const rel of codeFiles(root)) {
+    const head = readFileSync(join(root, rel), 'utf8').split('\n').slice(0, 5).join('\n');
+    if (!head.includes('SPDX-License-Identifier: Apache-2.0')) missing.push(rel);
+  }
+  assert.deepEqual(missing, [], `add "SPDX-License-Identifier: Apache-2.0" near the top of: ${missing.join(', ')}`);
+});
+
+console.log(`repo checks: ${passed} passed, ${failed} failed`);
+if (failed) process.exit(1);

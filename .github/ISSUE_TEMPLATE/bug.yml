@@ -1,0 +1,60 @@
+name: Bug report
+description: Something zapped wrongly, broke a page, or didn't work.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please leave out anything private: page text you wouldn't post publicly, personal URLs, or your lens if you'd rather keep it to yourself.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Set the confidence slider to ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: site
+    attributes:
+      label: Site
+      description: The site it happened on, if it's a public page.
+      placeholder: news.ycombinator.com
+  - type: dropdown
+    id: scorer
+    attributes:
+      label: Scorer
+      options:
+        - Built-in (lexical)
+        - Local model
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model and server
+      description: If you used a local model.
+      placeholder: Kev-4B on llama-server
+  - type: input
+    id: versions
+    attributes:
+      label: LensZap and browser versions
+      description: LensZap's version is on chrome://extensions.
+      placeholder: LensZap 0.2.0, Chrome 142
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, console errors, or the side panel's debug report.

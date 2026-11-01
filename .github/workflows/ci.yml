@@ -5,18 +5,22 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [18, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install --no-audit --no-fund
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - run: npm test
   lenspub-schema:
     # Warns (does not fail) when LensPub's lens schema has moved past the pinned commit.
