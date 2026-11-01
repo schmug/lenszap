@@ -6,7 +6,7 @@
 // synced:
 //   lens         the reader's Lens Manifest (shareable, history-free)
 //   draftWeights interest-slider positions not yet saved into the lens
-//   settings     confidence threshold and scorer choice
+//   settings     confidence threshold, scorer choice, and the browser-wide pause
 //   sites        per-site pause and threshold, keyed by hostname
 //   training     the reader's Keep/Zap marks: scores only, no text, no URLs
 // Only `lens` is ever exported. draftWeights, sites, and training are Adaptation State in
@@ -22,6 +22,7 @@
 
 import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
+import { badgeFor } from '../core/pause.js';
 
 const DEFAULT_SETTINGS = {
   threshold: 0.8,
@@ -30,6 +31,8 @@ const DEFAULT_SETTINGS = {
   hoverInfo: true,
   animate: true,
   sidebarCollapsed: false,
+  // Browser-wide pause: nothing is hidden on any site. Per-site pauses are in `sites`.
+  paused: false,
   // llama-server's decision endpoint; the model is whatever llama-server loaded.
   // concurrency: requests in flight at once (match llama-server's --parallel).
   model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '', concurrency: 4 }
@@ -87,6 +90,23 @@ async function scoreWithModel(blocks, topics) {
     }
   });
   return { scores: blocks.map((b) => results.get(b.id)), scorer: modelScorerId(m) };
+}
+
+// The toolbar badge: a count of hidden blocks, or ‖ in grey while paused.
+async function showBadge({ text, color, title }, tabId) {
+  const where = tabId == null ? {} : { tabId };
+  await Promise.all([
+    chrome.action.setBadgeText({ ...where, text }),
+    chrome.action.setBadgeBackgroundColor({ ...where, color }),
+    chrome.action.setTitle({ ...where, title })
+  ]).catch(() => {});
+}
+
+// The default badge, for tabs the zapper cannot run on (browser pages, the Web
+// Store): ‖ while paused everywhere, so the pause is visible from any tab.
+async function syncGlobalBadge() {
+  const { settings } = await load();
+  await showBadge(badgeFor(null, settings.paused === true));
 }
 
 const handlers = {
@@ -178,8 +198,7 @@ const handlers = {
   async 'page-update'({ page }, sender) {
     const tabId = sender?.tab?.id;
     if (tabId == null) return { ok: false };
-    const n = page?.zapped?.length ?? 0;
-    await chrome.action.setBadgeText({ tabId, text: page?.paused ? '‖' : n ? String(n) : '' });
+    await showBadge(badgeFor(page), tabId);
     return { ok: true };
   },
 
@@ -229,4 +248,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // The toolbar button opens the side panel, where all the controls are.
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-chrome.action.setBadgeBackgroundColor({ color: '#c62828' }).catch(() => {});
+syncGlobalBadge();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.settings) syncGlobalBadge();
+});
