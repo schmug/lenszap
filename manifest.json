@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "LensPub Zapper (PoC, not a LensPub engine)",
+  "version": "0.1.0",
+  "description": "Hides page blocks that don't match your LensPub lens. Uses your lens, but unlike a LensPub engine it hides content. Runs locally; every zap is listed and restorable.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/content.js"],
+      "css": ["content/zap.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "LensPub Zapper settings"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["core/*.js", "content/panel.css"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
+}

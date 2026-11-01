@@ -1,0 +1,93 @@
+{
+  "lenspub": "0.1",
+  "type": "LensManifest",
+  "id": "https://avery.example/lenses/avery-daily",
+  "metadata": {
+    "name": "Avery's Daily Lens",
+    "description": "Avery's everyday reading lens: emphasizes local-first software and school cybersecurity coverage, trusts The Example Journal, distrusts contentmill.example, and asks for missing citations to be surfaced.",
+    "lensVersion": "1.4.2",
+    "created": "2026-03-02T09:15:00Z",
+    "modified": "2026-07-01T18:40:00Z",
+    "language": "en"
+  },
+  "domains": [
+    {
+      "id": "technical-research",
+      "label": "Technical research",
+      "description": "Software architecture, protocols, and tooling."
+    },
+    {
+      "id": "local-news",
+      "label": "Local news",
+      "description": "Coverage of Avery's town, school district, and region."
+    }
+  ],
+  "interpretation": {
+    "priorities": [
+      {
+        "topic": "local-first software",
+        "weight": 0.9,
+        "domains": ["technical-research"],
+        "rationale": "I build local-first tools and want coverage of them surfaced first."
+      },
+      {
+        "topic": "school cybersecurity",
+        "weight": 0.8,
+        "domains": ["local-news"],
+        "rationale": "My kids' district has had two incidents; I follow this closely."
+      },
+      {
+        "topic": "data privacy",
+        "weight": 0.6
+      },
+      {
+        "topic": "celebrity gossip",
+        "weight": -0.5,
+        "rationale": "De-emphasize; I do not want this material made more prominent."
+      }
+    ],
+    "sources": {
+      "trusted": [
+        {
+          "origin": "example-journal.example",
+          "weight": 0.9,
+          "note": "Consistent corrections policy and named reporters."
+        }
+      ],
+      "distrusted": [
+        {
+          "origin": "contentmill.example",
+          "weight": 0.8,
+          "note": "Repackages wire stories without attribution."
+        }
+      ],
+      "requireProvenance": ["citations"]
+    },
+    "presentation": {
+      "annotations": true,
+      "summaries": "brief",
+      "evidenceIndicators": true,
+      "counterpoints": "on-request",
+      "primarySourceExpansion": true,
+      "explanationDisplay": "on-request"
+    }
+  },
+  "adaptation": {
+    "defaultPolicy": "balanced",
+    "domainPolicies": [
+      {
+        "domain": "technical-research",
+        "policy": "adaptive"
+      },
+      {
+        "domain": "local-news",
+        "policy": "conservative"
+      }
+    ]
+  },
+  "privacy": {
+    "remoteInference": {
+      "allowed": false
+    }
+  }
+}

@@ -1,0 +1,47 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Styles for the zapper's panel, loaded into its shadow root so neither the
+ * page nor the panel can restyle the other.
+ */
+:host { all: initial; }
+.panel {
+  position: fixed; right: 16px; bottom: 16px; z-index: 2147483647;
+  width: 360px; max-height: 70vh; display: flex; flex-direction: column;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1b1b1f;
+  background: #fff; border: 1px solid #c9c9d1; border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); overflow: hidden;
+}
+.panel.collapsed { width: auto; }
+.panel.collapsed .body, .panel.collapsed .tabs { display: none; }
+header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #f4f4f7; border-bottom: 1px solid #e2e2e8; }
+header .title { font-weight: 650; }
+header .count { flex: 1; color: #444; }
+header .count strong { color: #c62828; }
+button {
+  font: inherit; border: 1px solid #b9b9c3; background: #fff; color: #1b1b1f;
+  border-radius: 6px; padding: 3px 8px; cursor: pointer;
+}
+button:hover { background: #f0f0f5; }
+button:focus-visible, input:focus-visible { outline: 2px solid #3a5bd9; outline-offset: 1px; }
+button[aria-pressed="true"] { background: #1b1b1f; color: #fff; border-color: #1b1b1f; }
+button.primary { background: #3a5bd9; color: #fff; border-color: #3a5bd9; }
+.tabs { display: flex; border-bottom: 1px solid #e2e2e8; }
+.tabs button { flex: 1; border: 0; border-radius: 0; padding: 6px; background: #fafafc; }
+.tabs button[aria-selected="true"] { background: #fff; font-weight: 650; box-shadow: inset 0 -2px 0 #3a5bd9; }
+.body { overflow: auto; padding: 8px 10px 10px; }
+.note { color: #555; font-size: 12px; margin: 4px 0 8px; }
+.warn { background: #fff4e5; border: 1px solid #f0b46a; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+.error { background: #fdecea; border: 1px solid #e57373; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+ul { list-style: none; margin: 0; padding: 0; }
+li.entry { border-bottom: 1px solid #eee; padding: 6px 0; }
+li.entry .row { display: flex; gap: 8px; align-items: flex-start; }
+li.entry .snippet { flex: 1; }
+li.entry .why { color: #666; font-size: 11.5px; margin-top: 2px; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin: 10px 0 4px; }
+.slider { margin: 8px 0; }
+.slider label { display: flex; justify-content: space-between; gap: 8px; }
+.slider input[type="range"] { width: 100%; }
+.slider .val { font-variant-numeric: tabular-nums; color: #3a5bd9; font-weight: 600; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
+.kv dt { color: #666; }
+.kv dd { margin: 0; }

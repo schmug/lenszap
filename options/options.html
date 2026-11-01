@@ -1,0 +1,58 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LensPub Zapper — settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>LensPub Zapper</h1>
+    <p class="disclaimer">This tool uses your LensPub lens, but it is <strong>not a LensPub engine</strong>: unlike one, it hides parts of pages. Every hidden block is listed in the page's ledger and can be restored.</p>
+
+    <section aria-labelledby="lens-h">
+      <h2 id="lens-h">Your lens</h2>
+      <p id="lens-summary">Loading…</p>
+      <ul id="unsupported" class="muted"></ul>
+      <div class="row">
+        <label class="file">Import a lens (JSON)… <input type="file" id="import" accept="application/json,.json"></label>
+        <button id="export">Export lens</button>
+        <button id="reset">Reset to sample lens</button>
+      </div>
+      <p id="lens-status" role="status"></p>
+    </section>
+
+    <section aria-labelledby="scorer-h">
+      <h2 id="scorer-h">Scorer</h2>
+      <fieldset>
+        <legend>How blocks are judged</legend>
+        <label><input type="radio" name="scorer" value="lexical"> Words only (no model, works immediately, zaps too much on real pages)</label>
+        <label><input type="radio" name="scorer" value="model"> A model running on this machine</label>
+      </fieldset>
+      <div id="model-settings">
+        <label>API
+          <select id="api">
+            <option value="ollama">Ollama (native /api/chat)</option>
+            <option value="openai">OpenAI-compatible (llama.cpp server, LM Studio, vLLM)</option>
+          </select>
+        </label>
+        <label>Endpoint <input id="endpoint" type="url" placeholder="http://localhost:11434"></label>
+        <label>Model <input id="model" type="text" placeholder="qwen3:4b"></label>
+        <p class="muted">Only addresses on this machine (localhost, 127.0.0.1) are accepted, so page text never leaves your device. For Ollama, start it with <code>OLLAMA_ORIGINS=chrome-extension://*</code> so it accepts requests from the extension.</p>
+        <div class="row"><button id="save-model">Save</button><button id="test-model">Test connection</button></div>
+      </div>
+      <p id="scorer-status" role="status"></p>
+    </section>
+
+    <section aria-labelledby="local-h">
+      <h2 id="local-h">Kept on this device only</h2>
+      <p class="muted">Unsaved interest-slider positions and per-site settings (pause, threshold). These are never written into your lens or exported.</p>
+      <p id="local-summary"></p>
+      <button id="clear-local">Clear</button>
+    </section>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

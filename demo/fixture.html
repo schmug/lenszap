@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0
+     A fictional page for trying the zapper. Every name, place, and story here
+     is invented. It mixes blocks on the sample lens's topics with blocks off
+     them, plus page controls and a correction that must never be zapped. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>The Riverside Ledger — fictional demo page</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font: 17px/1.6 Georgia, serif; margin: 0; color: #222; background: #fbfaf7; }
+    nav, footer { font: 14px system-ui, sans-serif; background: #213547; color: #fff; padding: 10px 24px; }
+    nav a, footer a { color: #cfe3ff; margin-right: 14px; }
+    .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 32px; max-width: 1100px; margin: 24px auto; padding: 0 24px; }
+    aside { font-size: 15px; }
+    aside .card, .feed li { background: #fff; border: 1px solid #e6e2d8; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+    .feed { list-style: none; padding: 0; }
+    .correction { background: #fff8e1; border-left: 4px solid #f0b400; padding: 8px 14px; }
+    form { background: #eef4fb; border-radius: 8px; padding: 12px 14px; font-family: system-ui, sans-serif; }
+    [role="dialog"] { position: fixed; left: 16px; bottom: 16px; max-width: 360px; background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 12px 14px; font: 14px system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+  </style>
+</head>
+<body>
+  <nav aria-label="Sections"><a href="#">Local</a><a href="#">Schools</a><a href="#">Technology</a><a href="#">Sports</a><a href="#">Entertainment</a></nav>
+
+  <div class="wrap">
+    <main>
+      <article>
+        <h1>Riverside schools restore systems three weeks after ransomware attack</h1>
+        <p><em>By a staff reporter of the fictional Riverside Ledger</em></p>
+        <p>The Riverside Unified School District said on Monday that its student information system is back online, three weeks after a ransomware attack forced teachers to take attendance on paper. District officials described the incident as the most serious school cybersecurity event in the county's history.</p>
+        <p>According to the district's incident report, the attackers entered through a vendor account that lacked multi-factor authentication. The report says no evidence has been found that student records were copied, though the investigation is continuing and families will be notified if that changes.</p>
+        <p class="correction">Correction: An earlier version of this story said the attack lasted two weeks. It lasted three weeks.</p>
+        <p>Parents at Tuesday's board meeting pressed for details on data privacy, asking which student data the vendor could access and how long it is retained. The superintendent promised a public data inventory by the end of the semester.</p>
+        <p>The weather service expects a mild weekend with light rain on Sunday afternoon, clearing by evening, and temperatures in the low sixties across the valley.</p>
+        <p>Tickets for the spring musical at Riverside High go on sale Friday at the box office, with matinee performances on both Saturdays of the run and a discounted price for seniors.</p>
+      </article>
+
+      <h2>More from Technology</h2>
+      <ul class="feed">
+        <li><strong>Why a local co-op wrote its own sync engine.</strong> The farm cooperative's inventory app now works offline in barns with no signal, using local-first software techniques that merge changes when phones reconnect.</li>
+        <li><strong>The county's new parking app.</strong> Drivers can now pay meters downtown from their phones, and the city says enforcement officers will see payments instantly on their handheld devices.</li>
+        <li><strong>Review: three budget laptops for students.</strong> We tested battery life, keyboards, and screens on three machines under four hundred dollars to see which survives a school year.</li>
+      </ul>
+
+      <form aria-label="Newsletter">
+        <label>Get the Ledger's morning newsletter in your inbox every weekday <input type="email" placeholder="you@example.com"></label>
+        <button type="submit">Subscribe</button>
+      </form>
+
+      <h2>Comments</h2>
+      <div class="comments">
+        <p>Great reporting. Our PTA has been asking about the vendor contract for months and nobody would answer, so it is good to finally see the details in print.</p>
+        <p>Does anyone know if the high school football game moved to Saturday because of the rain? The schedule page still says Friday night at seven.</p>
+      </div>
+    </main>
+
+    <aside aria-label="Trending">
+      <div class="card"><strong>Trending in Entertainment.</strong> Pop star spotted with mystery companion at a seaside restaurant, fueling celebrity gossip about a secret engagement and a summer wedding.</div>
+      <div class="card"><strong>Sports.</strong> The Riverside Otters beat the Hillcrest Hawks four to two in extra innings to clinch a playoff spot for the first time in nine seasons.</div>
+      <div class="card"><strong>Opinion.</strong> Every school board should publish a plain-language data privacy notice that parents can read in five minutes, not a forty-page legal document.</div>
+    </aside>
+  </div>
+
+  <footer>The Riverside Ledger is a fictional publication made for this demo. <a href="#">About</a> <a href="#">Contact</a></footer>
+
+  <div role="dialog" aria-label="Cookie notice">This fictional site uses no cookies, but real sites show notices like this one, and the zapper must never hide them.</div>
+</body>
+</html>
