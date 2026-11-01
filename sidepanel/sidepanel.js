@@ -104,7 +104,10 @@ function renderHeader() {
   const count = $('count');
   count.replaceChildren();
   if (!page) count.textContent = 'Not running on this page';
-  else if (page.paused) count.textContent = 'Paused on this site';
+  else if (page.paused) {
+    count.textContent = `Paused · ${page.wouldZap.length} would be hidden`;
+    if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
+  }
   else {
     count.append(h('strong', { text: String(page.zapped.length) }), ` hidden of ${page.blocks}`);
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
@@ -181,7 +184,7 @@ function renderLedger(force = false) {
   parts.push(h('p', { class: 'note' },
     page.zapped.length
       ? 'Every hidden block is listed here. Show puts it back on this page. Hover any block on the page for its score.'
-      : page.paused ? 'The zapper is paused on this site.' : page.progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
+      : page.paused ? `Paused on this site: nothing is hidden and nothing is drawn on the page. Blocks are still scored, so resuming is instant. ${page.wouldZap.length} block${page.wouldZap.length === 1 ? '' : 's'} would be hidden.` : page.progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
   if (page.zapped.length) parts.push(h('div', { class: 'actions' }, h('button', { text: 'Restore all', on: { click: act('restore-all') } })));
   const entry = (d, button) =>
     h('li', { class: 'entry' },
@@ -192,6 +195,10 @@ function renderLedger(force = false) {
       h('div', { class: 'why', text: d.trace }));
   parts.push(h('ul', {}, page.zapped.map((d) =>
     entry(d, h('button', { text: 'Show', 'aria-label': `Show hidden block: ${d.snippet.slice(0, 60)}`, on: { click: act('restore', { id: d.id }) } })))));
+  if (page.paused && page.wouldZap.length) {
+    parts.push(h('h3', { text: 'Would be hidden' }));
+    parts.push(h('ul', {}, page.wouldZap.map((d) => entry(d, null))));
+  }
   if (page.restored.length) {
     parts.push(h('h3', { text: 'Restored on this page' }));
     parts.push(h('ul', {}, page.restored.map((d) =>

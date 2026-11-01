@@ -253,7 +253,7 @@
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const ZAP_MS = 650;
   const UNZAP_MS = 450;
-  const animating = () => state.settings.animate !== false && !reduceMotion.matches && !ui.before;
+  const animating = () => state.settings.animate !== false && !reduceMotion.matches && !ui.before && !paused();
   const inView = (el) => {
     const r = el.getBoundingClientRect();
     return r.bottom > 0 && r.top < innerHeight && r.width > 0;
@@ -288,11 +288,13 @@
 
   function apply() {
     const scored = [...blocks.keys()].filter((id) => scores.has(id)).map((id) => scores.get(id));
-    decisions = paused() || ledgerFailure
+    // Paused: blocks are still scored and decided, so resuming is instant and
+    // the panel can say what would be hidden, but nothing on the page changes.
+    decisions = ledgerFailure
       ? []
       : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored });
     decisionById = new Map(decisions.map((d) => [d.id, d]));
-    const zap = new Set(decisions.filter((d) => d.zap).map((d) => d.id));
+    const zap = new Set(paused() ? [] : decisions.filter((d) => d.zap).map((d) => d.id));
     for (const [id, b] of blocks) setZap(b, zap.has(id));
 
     const hidden = new Set(
@@ -308,7 +310,9 @@
       decisions = [];
       decisionById = new Map();
     }
-    if (tipFor) renderTip(tipFor);
+    drawSparks();
+    if (paused() && tipFor && !ui.train) hideTip();
+    else if (tipFor) renderTip(tipFor);
     report();
   }
 
@@ -334,7 +338,8 @@
       train: ui.train,
       rule: rule?.name ?? null,
       labelled: { keep: [...labels.values()].filter((l) => l === 'keep').length, zap: [...labels.values()].filter((l) => l === 'zap').length },
-      zapped: decisions.filter((d) => d.zap).map(entry),
+      zapped: paused() ? [] : decisions.filter((d) => d.zap).map(entry),
+      wouldZap: paused() ? decisions.filter((d) => d.zap).map(entry) : [],
       restored: decisions.filter((d) => d.exempt === 'restored').map(entry)
     };
   }
@@ -436,7 +441,7 @@
     return { left, top, width: Math.max(...rects.map((r) => r.right)) - left, height: Math.max(...rects.map((r) => r.bottom)) - top };
   }
   function drawSparks() {
-    const show = state.settings.animate !== false && !reduceMotion.matches;
+    const show = state.settings.animate !== false && !reduceMotion.matches && !paused();
     for (const [id, svg] of sparkEls) {
       if (!show || !active.has(id)) {
         svg.remove();
@@ -586,7 +591,7 @@
   }
 
   document.addEventListener('pointerover', (e) => {
-    if (pinned || (state.settings.hoverInfo === false && !ui.train)) return;
+    if (pinned || ((paused() || state.settings.hoverInfo === false) && !ui.train)) return;
     const el = e.target instanceof Element ? e.target.closest('[data-lpz-id]') : null;
     const id = el?.getAttribute('data-lpz-id') ?? null;
     if (id === hoverId) return;

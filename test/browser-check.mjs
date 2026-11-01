@@ -256,6 +256,21 @@ await tab('Settings');
 assert.ok(await panel.isVisible('text=Show the score when I hover over a block'));
 if (shots) await panel.screenshot({ path: join(shots, 'panel-settings.jpg'), quality: 85 });
 
+// Pause: blocks are still scored and decided, but nothing on the page changes.
+await panel.click('button:text-is("Pause on this site")');
+await page.waitForFunction(() => !document.querySelector('[data-lpz-zapped], [data-lpz-zapping]'), null, { timeout: 5000 });
+assert.equal(await page.isVisible('text=mild weekend'), true, 'paused: nothing hidden');
+await panel.waitForSelector('#count:has-text("would be hidden")');
+const wouldText = await panel.textContent('#count');
+assert.ok(Number(wouldText.match(/(\d+) would be hidden/)[1]) > 0, `paused: still scored and decided (${wouldText})`);
+await page.hover('p:has-text("student information system is back online")');
+await page.waitForTimeout(400);
+assert.equal(await tipHtml(), null, 'paused: no hover popover');
+await page.mouse.move(5, 5);
+await panel.click('button:text-is("Resume on this site")');
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]').length > 0, null, { timeout: 5000 });
+await settle();
+
 // --- Site rule: table-row stories are one block each -------------------------
 await context.route('https://news.ycombinator.com/**', (route) =>
   route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: linkTable }));
