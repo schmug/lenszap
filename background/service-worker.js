@@ -14,17 +14,19 @@
 //
 // Network: with the lexical scorer (the default) the zapper makes no requests.
 // With the model scorer it makes requests to one endpoint on this machine
+// (llama-server's /v1/systemone for decision models, or a chat API)
 // (localhost or 127.0.0.1, enforced in core/model-scorer.js); nothing ever
 // leaves the device. The other fetch() here loads the bundled sample lens
 // from the extension's own package.
 
 import { commitDraft, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
-import { buildRequest, parseResponse, batches, modelScorerId } from '../core/model-scorer.js';
+import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 
 const DEFAULT_SETTINGS = {
   threshold: 0.8,
   scorer: 'lexical',
-  model: { api: 'ollama', endpoint: 'http://localhost:11434', model: 'qwen3:4b' }
+  // llama-server's decision endpoint; the model is whatever llama-server loaded.
+  model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '' }
 };
 
 async function bundledLens() {
@@ -69,20 +71,14 @@ async function scoreWithModel(blocks, topics) {
     if (hit) results.set(b.id, { ...hit, id: b.id });
     else todo.push(b);
   }
-  for (const batch of batches(todo)) {
-    const { url, init } = buildRequest(m, batch, topics);
-    const res = await fetch(url, init);
-    if (!res.ok) throw new Error(`Model endpoint answered ${res.status} ${res.statusText}`);
-    const parsed = parseResponse(m.api, await res.json(), batch, topics);
-    for (const r of parsed) {
-      results.set(r.id, r);
-      if (!r.unscored) {
-        if (scoreCache.size >= CACHE_LIMIT) scoreCache.delete(scoreCache.keys().next().value);
-        const text = batch.find((b) => b.id === r.id).text;
-        scoreCache.set(cacheKey(m, topics, text), r);
-      }
+  const fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i));
+  fresh.forEach((r, i) => {
+    results.set(r.id, r);
+    if (!r.unscored) {
+      if (scoreCache.size >= CACHE_LIMIT) scoreCache.delete(scoreCache.keys().next().value);
+      scoreCache.set(cacheKey(m, topics, todo[i].text), r);
     }
-  }
+  });
   return { scores: blocks.map((b) => results.get(b.id)), scorer: modelScorerId(m) };
 }
 

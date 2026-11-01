@@ -143,7 +143,7 @@ const local = await worker.evaluate(() => chrome.storage.local.get(null));
 assert.ok(!JSON.stringify(local.lens).includes('127.0.0.1'), 'lens holds no trace of the page');
 
 // --- Model scorer path, against a stand-in model server on 127.0.0.1 --------
-// The stand-in answers the OpenAI-compatible and Ollama APIs with canned
+// The stand-in answers the decision-model (/v1/systemone), OpenAI-compatible, and Ollama APIs with canned
 // judgments, so this exercises the real plumbing (service worker fetch,
 // batching, parsing, decisions) without needing a model installed. It omits
 // one passage on purpose: a block the model says nothing about must stay.
@@ -162,6 +162,21 @@ const modelServer = createServer((req, res) => {
   req.on('end', () => {
     modelCalls++;
     const body = JSON.parse(raw);
+    if (req.url === '/v1/systemone') {
+      // Decision-model API: one block per request, a noul question per topic.
+      const text = body.state;
+      const answers = {};
+      if (!text.includes('spring musical')) {
+        const m = judge(text);
+        for (const [key, q] of Object.entries(body.questions)) {
+          const topic = Object.keys(m).find((t) => q.instructions.includes(t));
+          answers[key] = { type: 'noul', noul: key === 'evidence' ? (/Correction/.test(text) ? 0.95 : 0.02) : m[topic] ?? 0 };
+        }
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ model: 'stand-in', answers, usage: { input_tokens: 0, output_tokens: 0 } }));
+      return;
+    }
     const { passages } = JSON.parse(body.messages[1].content);
     const results = passages
       .filter((p) => !p.text.includes('spring musical'))
@@ -174,7 +189,7 @@ const modelServer = createServer((req, res) => {
 await new Promise((r) => modelServer.once('listening', r));
 const modelEndpoint = `http://127.0.0.1:${modelServer.address().port}`;
 
-for (const api of ['openai', 'ollama']) {
+for (const api of ['systemone', 'openai', 'ollama']) {
   await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
     threshold: 0.8,
     scorer: 'model',

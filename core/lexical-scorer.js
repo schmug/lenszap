@@ -50,7 +50,7 @@ export function topicMatch(blockTokens, topic) {
 }
 
 const EVIDENCE_PATTERN =
-  /\b(correction|corrected|clarification|retraction|editor['’]s note|update:|we previously reported|primary source|according to (?:the )?(?:study|report|data|filing|court records))\b/i;
+  /\b(correction|corrected|clarification|retraction|editor['’]s note|update:|we previously reported|primary source|dataset|according to (?:the )?(?:study|report|data|filing|court records))\b/i;
 
 /**
  * Lexical guess at whether a block is a correction, a clarification, or cites

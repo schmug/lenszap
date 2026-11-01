@@ -1,28 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The local-model scorer: asks a small language model running on the reader's
-// own machine how well each block matches each interest topic.
+// The local-model scorer: asks a model running on the reader's own machine how
+// well each block matches each interest topic.
 //
-// It speaks two widely implemented local APIs:
-//   - "ollama": Ollama's native /api/chat with a JSON-schema `format`;
+// It speaks three local APIs:
+//   - "systemone": the decision-model endpoint /v1/systemone served by
+//     llama.cpp's llama-server (Clef-flash, Kev-4B, Julia-1, and others). This
+//     is the intended path. A decision model returns calibrated
+//     probabilities from one forward pass, with no text to parse. Each block
+//     is one request: the block is the `state`, and every topic is a yes/no
+//     (`noul`) question, plus one question asking whether the block is a
+//     correction or cites a primary source.
+//   - "ollama": Ollama's native /api/chat with a JSON-schema `format`, for
+//     ordinary chat models. Ollama cannot serve decision models' decision
+//     endpoint; a chat runner loads only the backbone and produces noise.
 //   - "openai": the OpenAI-compatible /v1/chat/completions served by
-//     llama.cpp's llama-server, LM Studio, vLLM, and Ollama itself.
-// Any instruction-following model works. A decision model such as Clef-flash
-// fits the task best (docs/explorations/semantic-zapper.md Section 3) but has
-// not been tested with this code.
+//     llama-server (chat models), LM Studio, vLLM, and Ollama.
 //
 // Local only: endpoints must be loopback addresses (isLoopbackEndpoint). A
 // hosted model would see every block of every page the reader opens, which is
 // the surveillance ADR-0005 exists to prevent.
 //
 // This module only builds requests and parses responses; the fetch happens in
-// background/service-worker.js. Pure and DOM-free.
+// background/service-worker.js and zapper/bench/bench.mjs. Pure and DOM-free.
+
+import { looksLikeEvidence } from './lexical-scorer.js';
 
 export const MAX_BLOCK_CHARS = 600;
 export const BATCH_SIZE = 12;
 
 export function modelScorerId(settings) {
-  return `model:${settings.model}@${settings.api}`;
+  return `model:${settings.model || 'default'}@${settings.api}`;
 }
 
 /** True only for http(s) URLs on localhost, 127.0.0.0/8, or [::1]. */
@@ -149,3 +157,127 @@ export function batches(blocks, size = BATCH_SIZE) {
 
 const stripFence = (s) => s.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
 const clamp01 = (x) => (Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0);
+
+// --- Decision models: llama-server /v1/systemone ---------------------------
+
+export const SYSTEMONE_MAX_STATE_CHARS = 1500;
+export const EVIDENCE_QUESTION = 'evidence';
+
+/** Question key for the i-th topic. Keys stay ASCII whatever the topic text. */
+const topicKey = (i) => `t${i}`;
+
+/**
+ * Build the /v1/systemone request for one block.
+ *
+ * @param {{endpoint: string, model?: string}} settings
+ * @param {{id: string, text: string}} block
+ * @param {string[]} topics
+ */
+export function buildSystemOneRequest(settings, block, topics) {
+  if (!isLoopbackEndpoint(settings.endpoint)) {
+    throw new Error('The model endpoint must be on this machine (localhost or 127.0.0.1).');
+  }
+  const questions = {};
+  topics.forEach((topic, i) => {
+    questions[topicKey(i)] = { type: 'noul', instructions: `Is this passage about ${topic}?` };
+  });
+  questions[EVIDENCE_QUESTION] = {
+    type: 'noul',
+    instructions:
+      'Is this passage a correction, clarification, or retraction, or does it cite a primary source such as a study, dataset, court record, or official filing?'
+  };
+  const body = {
+    state: `Passage from a web page:\n${String(block.text).slice(0, SYSTEMONE_MAX_STATE_CHARS)}`,
+    questions
+  };
+  if (settings.model) body.model = settings.model;
+  return {
+    url: `${settings.endpoint.replace(/\/+$/, '')}/v1/systemone`,
+    init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+  };
+}
+
+/**
+ * Parse a /v1/systemone response for one block. A topic whose answer is
+ * missing or malformed scores 0; if every topic is missing, the block is
+ * `unscored` and is never zapped.
+ */
+export function parseSystemOneResponse(json, block, topics) {
+  const answers = json?.answers ?? {};
+  const matches = {};
+  let answered = 0;
+  topics.forEach((topic, i) => {
+    const v = Number(answers[topicKey(i)]?.noul);
+    if (Number.isFinite(v)) answered++;
+    matches[topic] = clamp01(v);
+  });
+  const ev = Number(answers[EVIDENCE_QUESTION]?.noul);
+  const out = { id: block.id, matches, evidence: Number.isFinite(ev) && ev >= 0.5 };
+  if (topics.length > 0 && answered === 0) out.unscored = true;
+  return out;
+}
+
+// --- Running a scorer against an endpoint ------------------------------------
+
+/**
+ * Score blocks against a local endpoint with any of the three APIs. The fetch
+ * function is passed in, so the service worker and the Node benchmark share
+ * this code. Decision-model requests go one block at a time, `concurrency` at
+ * once (llama-server answers several in parallel when started with slots).
+ *
+ * A block counts as evidence (never zapped) if the model says so OR the
+ * word-level heuristic does: the guard against hiding a correction should not
+ * rest on one model's judgment alone.
+ *
+ * @param {{api: string, endpoint: string, model?: string}} settings
+ * @param {{id: string, text: string}[]} blocks
+ * @param {string[]} topics
+ * @param {typeof fetch} fetchFn
+ * @param {{concurrency?: number, onTiming?: (id: string, ms: number) => void}} [opts]
+ */
+export async function scoreWithEndpoint(settings, blocks, topics, fetchFn, { concurrency = 4, onTiming } = {}) {
+  const post = async (url, init) => {
+    const res = await fetchFn(url, init);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        detail = (await res.text()).slice(0, 200);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`Model endpoint answered ${res.status}${detail ? `: ${detail}` : ''}`);
+    }
+    return res.json();
+  };
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+  if (settings.api === 'systemone') {
+    const out = new Array(blocks.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < blocks.length) {
+        const i = next++;
+        const t0 = now();
+        const { url, init } = buildSystemOneRequest(settings, blocks[i], topics);
+        out[i] = withEvidenceGuard(parseSystemOneResponse(await post(url, init), blocks[i], topics), blocks[i]);
+        onTiming?.(blocks[i].id, now() - t0);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, blocks.length) }, worker));
+    return out;
+  }
+
+  const out = [];
+  for (const batch of batches(blocks)) {
+    const t0 = now();
+    const { url, init } = buildRequest(settings, batch, topics);
+    out.push(...parseResponse(settings.api, await post(url, init), batch, topics).map((r, i) => withEvidenceGuard(r, batch[i])));
+    const ms = (now() - t0) / batch.length;
+    for (const b of batch) onTiming?.(b.id, ms);
+  }
+  return out;
+}
+
+function withEvidenceGuard(score, block) {
+  return score.evidence || !looksLikeEvidence(block.text) ? score : { ...score, evidence: true };
+}

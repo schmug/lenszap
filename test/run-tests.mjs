@@ -26,7 +26,17 @@ import {
   validateLens,
   unsupportedFeatures
 } from '../core/lens-edit.js';
-import { isLoopbackEndpoint, buildRequest, parseResponse, batches, responseSchema } from '../core/model-scorer.js';
+import {
+  isLoopbackEndpoint,
+  buildRequest,
+  parseResponse,
+  batches,
+  responseSchema,
+  buildSystemOneRequest,
+  parseSystemOneResponse,
+  scoreWithEndpoint,
+  modelScorerId
+} from '../core/model-scorer.js';
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -287,6 +297,101 @@ await test('an unscored block is never zapped', () => {
 
 await test('batches splits evenly', () => {
   assert.deepEqual(batches([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+});
+
+// --- Decision models (llama-server /v1/systemone) ---------------------------
+
+const topicsT = ['school cybersecurity', 'data privacy'];
+
+await test('buildSystemOneRequest: one noul question per topic plus evidence', () => {
+  const { url, init } = buildSystemOneRequest({ endpoint: 'http://127.0.0.1:8080/' }, { id: 'b1', text: 'x'.repeat(3000) }, topicsT);
+  assert.equal(url, 'http://127.0.0.1:8080/v1/systemone');
+  const body = JSON.parse(init.body);
+  assert.deepEqual(Object.keys(body.questions), ['t0', 't1', 'evidence']);
+  assert.equal(body.questions.t0.type, 'noul');
+  assert.match(body.questions.t1.instructions, /data privacy/);
+  assert.ok(body.state.length < 1600, 'state is capped');
+  assert.ok(!('model' in body), 'model omitted when empty');
+  const withModel = JSON.parse(buildSystemOneRequest({ endpoint: 'http://localhost:8080', model: 'clef-flash' }, { id: 'b', text: 't' }, topicsT).init.body);
+  assert.equal(withModel.model, 'clef-flash');
+  assert.throws(() => buildSystemOneRequest({ endpoint: 'https://api.example.com' }, { id: 'b', text: 't' }, topicsT), /this machine/);
+});
+
+await test('parseSystemOneResponse: noul probabilities become matches', () => {
+  const json = { answers: { t0: { type: 'noul', noul: 0.91 }, t1: { type: 'noul', noul: 1.7 }, evidence: { type: 'noul', noul: 0.8 } } };
+  assert.deepEqual(parseSystemOneResponse(json, { id: 'b1' }, topicsT), {
+    id: 'b1',
+    matches: { 'school cybersecurity': 0.91, 'data privacy': 1 },
+    evidence: true
+  });
+  const partial = parseSystemOneResponse({ answers: { t0: { noul: 0.2 } } }, { id: 'b2' }, topicsT);
+  assert.deepEqual(partial.matches, { 'school cybersecurity': 0.2, 'data privacy': 0 });
+  assert.equal(partial.unscored, undefined);
+  assert.equal(parseSystemOneResponse({ error: 'x' }, { id: 'b3' }, topicsT).unscored, true);
+});
+
+await test('scoreWithEndpoint: systemone runs one request per block, in order, with concurrency', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    const body = JSON.parse(init.body);
+    calls.push(url);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    const on = body.state.includes('ransomware') ? 0.9 : 0.05;
+    return { ok: true, json: async () => ({ answers: { t0: { noul: on }, t1: { noul: 0 }, evidence: { noul: 0 } } }) };
+  };
+  const blocks = [
+    { id: 'a', text: 'ransomware hit the district' },
+    { id: 'b', text: 'football final' },
+    { id: 'c', text: 'ransomware again' },
+    { id: 'd', text: 'weather' },
+    { id: 'e', text: 'bake sale' }
+  ];
+  const timings = [];
+  const out = await scoreWithEndpoint({ api: 'systemone', endpoint: 'http://127.0.0.1:8080' }, blocks, topicsT, fakeFetch, {
+    concurrency: 2,
+    onTiming: (id) => timings.push(id)
+  });
+  assert.deepEqual(out.map((s) => s.id), ['a', 'b', 'c', 'd', 'e']);
+  assert.deepEqual(out.map((s) => s.matches['school cybersecurity']), [0.9, 0.05, 0.9, 0.05, 0.05]);
+  assert.equal(calls.length, 5);
+  assert.equal(peak, 2);
+  assert.equal(timings.length, 5);
+});
+
+await test('scoreWithEndpoint: the word-level evidence guard backs up the model', async () => {
+  const fakeFetch = async () => ({ ok: true, json: async () => ({ answers: { t0: { noul: 0 }, t1: { noul: 0 }, evidence: { noul: 0.01 } } }) });
+  const [r] = await scoreWithEndpoint(
+    { api: 'systemone', endpoint: 'http://127.0.0.1:8080' },
+    [{ id: 'c', text: 'Correction: the meeting is Tuesday.' }],
+    topicsT,
+    fakeFetch
+  );
+  assert.equal(r.evidence, true);
+});
+
+await test('scoreWithEndpoint: an HTTP error is reported, not swallowed', async () => {
+  const fakeFetch = async () => ({ ok: false, status: 501, text: async () => 'This model is not a decision model.' });
+  await assert.rejects(
+    scoreWithEndpoint({ api: 'systemone', endpoint: 'http://127.0.0.1:8080' }, [{ id: 'a', text: 't' }], topicsT, fakeFetch),
+    /501: This model is not a decision model/
+  );
+});
+
+await test('modelScorerId names the API, and the model when set', () => {
+  assert.equal(modelScorerId({ api: 'systemone', model: '' }), 'model:default@systemone');
+  assert.equal(modelScorerId({ api: 'ollama', model: 'qwen3:4b' }), 'model:qwen3:4b@ollama');
+});
+
+await test('bench passages are labelled and fictional-lens compatible', () => {
+  const { passages } = JSON.parse(read('zapper/bench/passages.json'));
+  assert.ok(passages.length >= 20);
+  for (const p of passages) assert.ok(['keep', 'zap', 'evidence'].includes(p.label), p.id);
+  assert.equal(new Set(passages.map((p) => p.id)).size, passages.length);
 });
 
 console.log(`zapper: ${passed} passed, ${failed} failed`);

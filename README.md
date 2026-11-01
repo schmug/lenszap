@@ -31,18 +31,48 @@ Zapping is a style change only. Nodes are never removed or rewritten, so **Befor
 | Scorer | Setup | Behavior |
 |---|---|---|
 | **Words only** (default) | None | Matches your topic words. It's fast and deterministic, but it zaps far too much on real pages, because a block about your topic that never uses its words looks off-lens. The demo page includes one such paragraph on purpose. |
-| **Local model** | A model server on this machine | A small model rates every block against every topic, plus whether the block is a correction or cites a source. Moving a slider re-runs only the decision step, never the model. |
+| **Local decision model** (recommended) | llama.cpp's `llama-server` on this machine | A decision model such as Clef-flash answers one yes/no question per topic for every block, plus one question asking whether the block is a correction or cites a source. It returns calibrated probabilities from a single forward pass, with no text to parse. Moving a slider re-runs only the decision step, never the model. |
+| **Local chat model** | Ollama, LM Studio, or any OpenAI-compatible server | Any instruction-following model, asked to return scores as JSON. It's slower and less calibrated than a decision model, but works with what you may already have installed. |
 
-The local-model scorer speaks Ollama's native API and the OpenAI-compatible API served by llama.cpp's `llama-server`, LM Studio, and vLLM. **Only addresses on this machine are accepted** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](../adr/0005-local-only-default.md)).
+**Only addresses on this machine are accepted** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](../adr/0005-local-only-default.md)). A block counts as a correction or source if either the model or the word-level check says so.
 
-To use Ollama:
+### Running a decision model locally
+
+Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/systemone`. **Ollama and LM Studio can't serve them**: a chat runner loads only the backbone and produces noise.
+
+1. **Install a recent llama.cpp.** Use `brew install llama.cpp` on macOS, `winget install llama.cpp` on Windows, or a release build on Linux. You need a build from October 2026 or later with decision-model support; the community Clef-flash quantizations were made with release b11430. Check with `llama-server --version`.
+2. **Start a model.** Pick one from the table below. Each command downloads the model on first run.
+
+   ```
+   llama-server -hf ggml-org/Clef-Flash-GGUF:Q4_K_M --port 8080 --parallel 4
+   ```
+
+   If long passages fail with a "too large to process" error, add `-ub 2048`.
+3. **Point the zapper at it.** In the extension's settings, choose **A model running on this machine**, then the **Decision model via llama-server** API, with endpoint `http://127.0.0.1:8080`. Leave Model empty. Press **Test connection**.
+4. **Measure it on your machine.** This scores 28 hand-labelled passages and reports latency and wrong-zap rates at each threshold, next to the word-only baseline:
+
+   ```
+   npm run zapper:bench                                  # default: decision model at 127.0.0.1:8080
+   npm run zapper:bench -- --concurrency 4               # match --parallel
+   npm run zapper:bench -- --api ollama --model qwen3:4b # a chat model in Ollama, for comparison
+   ```
+
+| Model | Size | Notes |
+|---|---|---|
+| `ggml-org/Clef-Flash-GGUF:Q4_K_M` | 9B; about a 6 GB download | Cloudflare's model and the best fit on paper. It wants a GPU or Apple-silicon unified memory with roughly 8 GB free; it will run on a CPU, but slowly. Apache-2.0. |
+| `ggml-org/Kev-4B-GGUF` | 4B | Smaller and faster. Apache-2.0. |
+| `ggml-org/Julia-1-GGUF` | 144M | Tiny and multilingual, and fine on a laptop CPU. Expect weaker judgments; the benchmark will tell you how much. Apache-2.0. |
+
+The sizes and licenses come from the model publishers and llama.cpp's announcement. **None of these models has been run with this code yet**: the cloud environment this was built in can't download models. The extension's model path, and the benchmark, were tested only against a stand-in server with canned answers. Your first benchmark run is the first real measurement.
+
+### Using a chat model instead
 
 ```
 OLLAMA_ORIGINS=chrome-extension://* ollama serve
 ollama pull qwen3:4b
 ```
 
-Then open the extension's settings, choose **A model running on this machine**, and keep the defaults (`http://localhost:11434`, `qwen3:4b`). Press **Test connection**. Any instruction-following model works. Cloudflare's open-weight decision model Clef-flash is the best fit on paper ([exploration §3](../docs/explorations/semantic-zapper.md#3-the-models-named)), served through llama.cpp's OpenAI-compatible endpoint. **Neither Clef-flash nor any real model has been tried with this code yet**: the browser check uses a stand-in server with canned answers.
+Then choose the **Chat model via Ollama** API with endpoint `http://localhost:11434` and model `qwen3:4b`.
 
 ## Install
 
@@ -100,7 +130,7 @@ The browser check loads the unpacked extension against the fictional fixture pag
 - controls and the correction never are;
 - **Before** and **Show** work, and every hidden block is listed;
 - saving a slider change writes a valid new lens version;
-- the model-scorer path works over both APIs (against a stand-in model server), including that a block the model skips stays visible.
+- the model-scorer path works over all three APIs (against a stand-in model server), including that a block the model skips stays visible.
 
 The check needs Playwright with Chromium and isn't run in CI.
 
@@ -115,6 +145,7 @@ zapper/
   options/               settings page: lens import/export, scorer, local data
   lenses/sample-lens.json
   demo/fixture.html      a fictional page for trying it
+  bench/                 benchmark: speed and wrong-zap rates for a scorer on your machine
   test/                  Node tests and the browser check
 ```
 
