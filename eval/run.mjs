@@ -65,17 +65,34 @@ if (dataset.length === 0) {
 const textOf = new Map();
 for (const { page } of dataset) for (const b of page.blocks) textOf.set(b.key, b.text);
 
+// A running count on stderr, so a long model run shows it is alive.
+const totalBlocks = () => dataset.reduce((n, d) => n + Object.values(d.labels).filter((l) => l !== 'skip').length, 0);
+let done = 0;
+let lastShown = 0;
+function progress(scorer) {
+  done++;
+  const now = Date.now();
+  if (process.stderr.isTTY || now - lastShown > 15000) {
+    lastShown = now;
+    process.stderr.write(`${process.stderr.isTTY ? '\r' : ''}  ${scorer}: ${done}/${totalBlocks()} blocks${process.stderr.isTTY ? '' : '\n'}`);
+  }
+}
+
 // Label-first: the topic → category relevance table is asked once and reused.
 let relevance;
 
 async function scoreAll(scorer) {
+  done = 0;
   const perPage = [];
   const timings = [];
   const t0 = performance.now();
   for (const { slug, page, labels } of dataset) {
     // Only labelled blocks are scored: unlabelled ones cannot be judged.
     const blocks = page.blocks.filter((b) => labels[b.key] && labels[b.key] !== 'skip').map((b) => ({ id: b.key, text: b.text }));
-    const onTiming = (_id, ms) => timings.push(ms);
+    const onTiming = (_id, ms) => {
+      timings.push(ms);
+      progress(scorer);
+    };
     let scores;
     if (scorer === 'lexical') scores = scoreLexical(blocks, topics);
     else if (scorer === 'categories') {
