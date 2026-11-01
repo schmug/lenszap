@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest something LensZap should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The problem or the browsing you want to be easier.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Fit
+      options:
+        - label: This keeps LensZap local only (no requests beyond the loopback model).
+        - label: This keeps lenses history-free (nothing about pages read goes into a lens).
