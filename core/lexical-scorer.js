@@ -49,8 +49,10 @@ export function topicMatch(blockTokens, topic) {
   return Math.round((hits / tokens.length) * 0.6 * 1000) / 1000;
 }
 
+// "Update:" and "(PDF)" end in punctuation, so they sit outside the \b…\b group:
+// a word boundary after a colon or a parenthesis never matches before a space.
 const EVIDENCE_PATTERN =
-  /\b(correction|corrected|clarification|retraction|editor['’]s note|update:|we previously reported|primary source|dataset|according to (?:the )?(?:study|report|data|filing|court records))\b/i;
+  /\b(?:correction|corrected|clarification|retraction|editor['’]s note|we previously reported|primary source|dataset|court (?:records|documents|filings?)|sentencing memo|indictment|according to (?:the )?(?:study|report|data|filing))\b|\bupdated?:|\(pdf\)/i;
 
 /**
  * Lexical guess at whether a block is a correction, a clarification, or cites

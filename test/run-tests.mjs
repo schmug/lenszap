@@ -103,6 +103,12 @@ await test('evidence heuristic catches corrections and primary sources', () => {
   assert.ok(looksLikeEvidence('Correction: an earlier version misstated the date.'));
   assert.ok(looksLikeEvidence("Editor's note: this story was updated."));
   assert.ok(!looksLikeEvidence('The match ended in a draw.'));
+  // Found on real pages by the eval: each of these was hidden before.
+  assert.ok(looksLikeEvidence('[Update: Oct. 10, 9:58 a.m. ET: A spokesperson said he was not a founder].'));
+  assert.ok(looksLikeEvidence('Federal court records show that on October 8 he was arrested.'));
+  assert.ok(looksLikeEvidence('On October 8, the U.K. issued sanctions (PDF) against the platform.'));
+  assert.ok(looksLikeEvidence('A sentencing memo filed Sept. 19 by federal prosecutors notes that...'));
+  assert.ok(!looksLikeEvidence('Software update brings a new lock screen.'), 'a bare "update" is not evidence');
 });
 
 await test('scoreLexical returns one score per block and topic', () => {
