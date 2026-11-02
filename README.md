@@ -204,6 +204,39 @@ The zapper reads these from your lens but doesn't act on them, and it lists them
 - **Pages can tell the extension is installed.** The extension exposes its own module files to pages, so a page can detect it. The controls are in the side panel, which pages can't reach, and the on-page popover is in a closed shadow root.
 - **The tool only lists what it hides.** It does not label the blocks it keeps as being on your lens.
 
+## A fast dev loop
+
+Set these once in your shell (`~/.zshrc`) so nothing needs flags. They are defaults for the dev scripts only; the extension keeps its own settings.
+
+```
+export LENSZAP_API=systemone
+export LENSZAP_ENDPOINT=http://127.0.0.1:8181   # wherever llama-server listens
+export LENSZAP_LENS=my-lens.json
+```
+
+Then, in three terminals:
+
+```
+llama-server -hf ggml-org/Kev-4B-GGUF --port 8181 --parallel 4
+npm run dev -- --site verge     # dev browser: reloads the extension and its tabs on every save
+npm run test:watch              # unit tests, re-run on every save to core/, test/, eval/
+```
+
+and, after a change, measure it:
+
+```
+npm run eval -- --site verge --show   # one page, every mistake listed
+npm run eval                          # every labelled page
+npm run capture -- --resplit          # after a splitter change, re-split the saved pages first (or --site verge)
+```
+
+- `npm run dev` opens Playwright's Chromium with the unpacked extension and `demo/fixture.html`, plus the captured snapshots named by `--site` (`--site all` for every one). It is offline: the only requests that leave the browser's pages are to this machine. `--live URL` opens a real page instead, which does go to the web. Its profile (`.dev-profile/`, git-ignored) keeps your lens and settings between runs; `--fresh` starts empty.
+- `npm run capture -- --resplit` is offline too: it serves the snapshots and refuses everything else they link to.
+- `npm run eval` caches model scores in `eval/data/cache/scores.json`, keyed by scorer, scorer code, topics, and block text. After a change to `decide.js` or the threshold, a re-run takes seconds; after a resplit or a prompt change, only new or changed blocks go to the model. Pass `--fresh` after swapping the model behind the same port.
+- Only fetching new pages (`npm run capture -- URL…`) and `--live` reach the web.
+
+Chromium itself may still try a request of its own on first start (a firewall such as Little Snitch can deny it; nothing in the loop needs it). Branded Chrome no longer loads an unpacked extension from the command line, which is why the dev browser is Chromium. In your own Chrome, load the folder once from `chrome://extensions` and press its reload button after a change.
+
 ## Tests
 
 ```

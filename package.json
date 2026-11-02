@@ -2,11 +2,16 @@
   "name": "lenszap",
   "version": "0.2.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "description": "A Chromium extension that hides page blocks off your LensPub lens, with a local decision model. Built on LensPub; not a LensPub engine.",
   "license": "Apache-2.0",
   "scripts": {
-    "test": "node test/run-tests.mjs",
+    "test": "node test/run-tests.mjs && node test/repo-checks.mjs",
+    "test:watch": "node --watch-path=core --watch-path=test --watch-path=eval test/run-tests.mjs",
+    "dev": "node scripts/dev.mjs",
     "bench": "node bench/bench.mjs",
     "browser-check": "node test/browser-check.mjs",
     "check-upstream": "node scripts/check-upstream.mjs",

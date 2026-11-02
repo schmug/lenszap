@@ -21,10 +21,22 @@
 //          extension's default keeps them). Blocks labelled neutral count as should-go
 //          with it and should-stay without it; a zap label always means should-go.
 //          --show (list every mistake with its text)  --json  --save (write results to DATA/results/)
+//          --site TEXT (only pages whose name contains TEXT, e.g. --site verge)
+//          --fresh (ask the model again instead of using DATA/cache/scores.json)
+//
+// LENSZAP_API, LENSZAP_ENDPOINT, LENSZAP_MODEL and LENSZAP_LENS set the defaults for
+// --api, --endpoint, --model and --lens, so a dev loop needs no flags.
+//
+// Model scores are cached in DATA/cache/scores.json (git ignores DATA), keyed by
+// scorer, the scorer code (core/model-scorer.js, core/lexical-scorer.js), the topics, and the block text,
+// so a re-run after a change to decide.js or the threshold takes seconds. A change
+// to the prompt or scorer code misses the cache on its own; swapping the model
+// behind the same endpoint does not, so pass --fresh then.
 //
 // Model requests go only to the loopback endpoint you name.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { scoreLexical, LEXICAL_SCORER_ID } from '../core/lexical-scorer.js';
@@ -37,11 +49,12 @@ import { compare, total, rates } from './metrics.mjs';
 const args = parseArgs(process.argv.slice(2));
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dataDir = args.data ?? join(root, 'eval/data');
-const api = args.api ?? 'lexical';
+const env = process.env;
+const api = args.api ?? env.LENSZAP_API ?? 'lexical';
 const settings = {
   api,
-  endpoint: args.endpoint ?? (api === 'ollama' ? 'http://localhost:11434' : 'http://127.0.0.1:8080'),
-  model: typeof args.model === 'string' ? args.model : ''
+  endpoint: args.endpoint ?? env.LENSZAP_ENDPOINT ?? (api === 'ollama' ? 'http://localhost:11434' : 'http://127.0.0.1:8080'),
+  model: typeof args.model === 'string' ? args.model : (env.LENSZAP_MODEL ?? '')
 };
 const concurrency = Number(args.concurrency ?? 4);
 // The extension's default thresholds (background/service-worker.js).
@@ -50,16 +63,35 @@ const THRESHOLDS = [...new Set([0.5, 0.6, 0.65, 0.7, 0.8, 0.9, ...(args.at ? [Nu
 const AD_TOPIC = 'advertising or sponsored content';
 const hideUnmatched = !!args['hide-unmatched'];
 
-const lens = readLens(args.lens ?? join(root, 'lenses/sample-lens.json'));
+const lens = readLens(args.lens ?? env.LENSZAP_LENS ?? join(root, 'lenses/sample-lens.json'));
 const priorities = lens.interpretation.priorities.map(({ topic, weight }) => ({ topic, weight }));
 if (args['zap-ads']) priorities.push({ topic: AD_TOPIC, weight: -1 });
 const topics = priorities.map((p) => p.topic);
 
-const dataset = loadDataset(dataDir).filter((d) => Object.keys(d.labels).length > 0);
+const site = typeof args.site === 'string' ? args.site.toLowerCase() : null;
+const dataset = loadDataset(dataDir)
+  .filter((d) => Object.keys(d.labels).length > 0)
+  .filter((d) => !site || d.slug.toLowerCase().includes(site));
 if (dataset.length === 0) {
-  console.error(`No labelled pages in ${dataDir}. Capture with npm run capture, then label with npm run label.`);
+  console.error(site
+    ? `No labelled page in ${dataDir} has "${args.site}" in its name. Names: ${loadDataset(dataDir).map((d) => d.slug).join(', ')}`
+    : `No labelled pages in ${dataDir}. Capture with npm run capture, then label with npm run label.`);
   process.exit(2);
 }
+
+// Model scores from earlier runs, so only new or changed blocks reach the model.
+const cachePath = join(dataDir, 'cache', 'scores.json');
+// The scorer and the evidence check it applies (core/lexical-scorer.js).
+const scorerCode = createHash('sha256')
+  .update(['core/model-scorer.js', 'core/lexical-scorer.js'].map((f) => readFileSync(join(root, f), 'utf8')).join('\0'))
+  .digest('hex').slice(0, 12);
+let cache = {};
+if (existsSync(cachePath)) {
+  try { cache = JSON.parse(readFileSync(cachePath, 'utf8')); } catch { cache = {}; }
+}
+const cacheKey = (scorerId, text) =>
+  createHash('sha256').update(JSON.stringify([scorerId, scorerCode, topics, text])).digest('hex').slice(0, 32);
+let cacheHits = 0;
 
 const textOf = new Map();
 for (const { page } of dataset) for (const b of page.blocks) textOf.set(b.key, b.text);
@@ -94,7 +126,18 @@ async function scoreAll(scorer) {
     };
     let scores;
     if (scorer === 'lexical') scores = scoreLexical(blocks, topics);
-    else scores = await scoreWithEndpoint(settings, blocks, topics, fetch, { concurrency, onTiming });
+    else {
+      const id = modelScorerId(settings);
+      const keyOf = new Map(blocks.map((b) => [b.id, cacheKey(id, b.text)]));
+      const cached = (b) => !args.fresh && !!cache[keyOf.get(b.id)];
+      const hit = blocks.filter(cached);
+      const miss = blocks.filter((b) => !cached(b));
+      cacheHits += hit.length;
+      for (let i = 0; i < hit.length; i++) progress(scorer);
+      const fresh = miss.length ? await scoreWithEndpoint(settings, miss, topics, fetch, { concurrency, onTiming }) : [];
+      for (const sc of fresh) if (!sc.unscored) cache[keyOf.get(sc.id)] = { matches: sc.matches, evidence: sc.evidence };
+      scores = [...hit.map((b) => ({ id: b.id, ...cache[keyOf.get(b.id)] })), ...fresh];
+    }
     perPage.push({ slug, labels, scores: [...scores, ...slots] });
   }
   return { perPage, wallMs: performance.now() - t0, timings };
@@ -129,12 +172,15 @@ if (api !== 'lexical') {
   {
     const id = modelScorerId(settings);
     const res = await scoreAll('model');
+    mkdirSync(join(dataDir, 'cache'), { recursive: true });
+    writeFileSync(cachePath, JSON.stringify(cache) + '\n');
+    if (process.stderr.isTTY) process.stderr.write('\n');
     const unscored = res.perPage.reduce((n, p) => n + p.scores.filter((s) => s.unscored).length, 0);
     res.timings.sort((a, b) => a - b);
     const pct = (q) => Math.round(res.timings[Math.min(res.timings.length - 1, Math.floor(q * res.timings.length))] ?? 0);
     runs.push({
       scorer: id,
-      timing: { wallMs: Math.round(res.wallMs), perBlockMedianMs: pct(0.5), perBlockP95Ms: pct(0.95), concurrency },
+      timing: { wallMs: Math.round(res.wallMs), perBlockMedianMs: pct(0.5), perBlockP95Ms: pct(0.95), concurrency, asked: res.timings.length, cached: cacheHits },
       unscored,
       rows: evaluate(res, id)
     });
@@ -164,7 +210,7 @@ for (const run of runs) {
   console.log(`Scorer: ${run.scorer}`);
   if (run.timing) {
     const t = run.timing;
-    console.log(`  Time: ${t.wallMs} ms total; per block median ${t.perBlockMedianMs} ms, p95 ${t.perBlockP95Ms} ms (concurrency ${t.concurrency}). Unscored: ${run.unscored}.`);
+    console.log(`  Time: ${t.wallMs} ms total; per block median ${t.perBlockMedianMs} ms, p95 ${t.perBlockP95Ms} ms (concurrency ${t.concurrency}; ${t.asked} asked, ${t.cached} from the cache). Unscored: ${run.unscored}.`);
   }
   console.log('  Zap at   Wanted, hidden   Should go, kept   Ads kept   Evidence hidden   Precision');
   for (const r of run.rows) {
