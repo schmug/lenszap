@@ -113,3 +113,46 @@ export function splitDecision(m) {
   if (m.headings >= 2 || m.storyLinks >= 2) return 'split';
   return m.severalChildren ? 'split' : 'block';
 }
+
+// --- Ad slots ----------------------------------------------------------------
+//
+// Display ads are mostly an image or an iframe with no text to score, so a
+// text scorer never sees them. The content script finds ad slots by structure
+// instead: an "Advertisement" or "Sponsored" label, an ad marker in the id or
+// class (themonic-ad3, sidebar_ad, ad-slot), or an iframe from an ad network,
+// in an element with almost no text of its own. An ad slot is zapped only when
+// the lens has a "less of this" interest about ads; otherwise it is left alone
+// like any block the scorer said nothing about.
+
+/** An ad slot has at most this much text (its "Advertisement" label, a caption). */
+export const AD_SLOT_MAX_CHARS = 80;
+/** A label that marks the element it sits in as an ad. */
+export const AD_LABEL = /^(advertisement|advertising|sponsored|sponsor|ad|ads|promoted|paid (content|post|partner))$/i;
+const AD_TOKEN = /(^|[-_])(ad|ads|advert|adverts|advertisement|adslot|ad-slot|sponsor|sponsored|promoted)\d*($|[-_])/i;
+const AD_HOSTS = /(^|\.)(doubleclick\.net|googlesyndication\.com|googleadservices\.com|adnxs\.com|amazon-adsystem\.com|taboola\.com|outbrain\.com|criteo\.(com|net)|adsrvr\.org|pubmatic\.com|rubiconproject\.com|carbonads\.(com|net)|buysellads\.com|media\.net)$/i;
+/** A lens topic about ads, e.g. "advertisements", "ads and sponsored posts". */
+export const AD_TOPIC = /\b(ads?|adverts?|advertis\w*|sponsor\w*|promoted)\b/i;
+
+/** Does an id or class list carry an ad marker (themonic-ad3, sidebar_ad, ad-slot)? */
+export function hasAdMarker(idAndClass) {
+  return String(idAndClass ?? '').split(/\s+/).some((t) => t && AD_TOKEN.test(t));
+}
+
+/** Is this an ad network's host? */
+export function isAdHost(host) {
+  return AD_HOSTS.test(String(host ?? ''));
+}
+
+/**
+ * The score for an ad slot: a strong match to the lens's ad topic, or unscored
+ * (never zapped) when the lens has no "less of this" interest about ads.
+ * @param {string} id
+ * @param {{topic: string, weight: number}[]} priorities
+ */
+export function adSlotScore(id, priorities) {
+  const matches = Object.fromEntries(priorities.map((p) => [p.topic, 0]));
+  const adTopics = priorities.filter((p) => p.weight < 0 && AD_TOPIC.test(p.topic));
+  if (adTopics.length === 0) return { id, matches, evidence: false, unscored: true, adSlot: true };
+  for (const p of adTopics) matches[p.topic] = 0.95;
+  return { id, matches, evidence: false, adSlot: true };
+}

@@ -42,7 +42,7 @@ import {
 } from '../core/model-scorer.js';
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
-import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision } from '../core/segment.js';
+import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -472,6 +472,23 @@ await test('carryLabels: unchanged keys keep labels, parts of one labelled block
   assert.equal(c.labels[next[1].key], undefined);
   assert.equal(c.labels[next[3].key], undefined, 'a small fragment does not inherit');
   assert.deepEqual([c.kept, c.inherited, c.unlabelled], [1, 1, 2]);
+});
+
+await test('ad slots: markers and hosts, zapped only when the lens has a "less of this" about ads', () => {
+  for (const t of ['themonic-ad3', 'sidebar_ad', 'widget ad-slot', 'promoted-post', 'ads']) assert.equal(hasAdMarker(t), true, t);
+  for (const t of ['load-more', 'shadow', 'header', 'badge', 'download', 'thread']) assert.equal(hasAdMarker(t), false, t);
+  assert.equal(isAdHost('googleads.g.doubleclick.net'), true);
+  assert.equal(isAdHost('doubleclick.net.example.com'), false);
+  const withAds = [{ topic: 'cybersecurity', weight: 1 }, { topic: 'advertisements', weight: -1 }];
+  const [d] = decide({ scores: [adSlotScore('a', withAds)], priorities: withAds, threshold: 0.65, scorer: 'x' });
+  assert.equal(d.zap, true);
+  assert.match(d.trace, /advertisements/);
+  const noAds = [{ topic: 'cybersecurity', weight: 1 }];
+  const [k] = decide({ scores: [adSlotScore('a', noAds)], priorities: noAds, threshold: 0.65, scorer: 'x' });
+  assert.equal(k.zap, false, 'no ad interest in the lens: an ad slot is left alone');
+  // An interest that is positive about ads never zaps them.
+  const likes = [{ topic: 'advertising industry news', weight: 1 }];
+  assert.equal(adSlotScore('a', likes).unscored, true);
 });
 
 await test('scoringOrder: on screen top to bottom, then below nearest first, then above', () => {

@@ -26,7 +26,7 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS }, { toExample }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
@@ -142,6 +142,56 @@
     return id;
   }
 
+  // --- Ad slots: found by structure, since a display ad has no text to score ---
+
+  const adSlots = new Set(); // block ids that are ad slots
+  const NEVER_AD = 'nav, form, dialog, menu, button, [role="dialog"], [role="navigation"], [role="menu"], [contenteditable="true"]';
+  const hasMedia = (el) => el.matches('img, iframe, picture, video') || !!el.querySelector('img, iframe, picture, video');
+  const rendered = (el) => el.getClientRects().length > 0 && el.getBoundingClientRect().width * el.getBoundingClientRect().height >= 1000;
+
+  /** The largest element around `el` that still holds almost no text. */
+  function slotAround(el) {
+    let unit = el;
+    for (let p = el.parentElement; p && p !== document.body && !p.matches('main, article, [role="main"]'); p = p.parentElement) {
+      if (norm(p.textContent).length > AD_SLOT_MAX_CHARS || p.hasAttribute('data-lpz-id')) break;
+      unit = p;
+    }
+    return unit;
+  }
+
+  function findAdSlots() {
+    const units = new Set();
+    // An "Advertisement" or "Sponsored" label: the element it labels is an ad.
+    for (const el of document.body.querySelectorAll('div, span, p, small, aside, section, figcaption')) {
+      if (el.children.length > 2 || !AD_LABEL.test(norm(el.textContent))) continue;
+      const parent = el.parentElement;
+      if (parent && parent !== document.body && norm(parent.textContent).length <= AD_SLOT_MAX_CHARS) units.add(slotAround(parent));
+    }
+    // An ad marker in the id or class, around an image or iframe.
+    for (const el of document.body.querySelectorAll('[id*="ad" i], [class*="ad" i], [id*="sponsor" i], [class*="sponsor" i], [class*="promoted" i]')) {
+      if (!hasAdMarker(`${el.id} ${el.getAttribute('class') ?? ''}`)) continue;
+      if (norm(el.textContent).length <= AD_SLOT_MAX_CHARS && hasMedia(el)) units.add(slotAround(el));
+    }
+    // An iframe from an ad network.
+    for (const f of document.body.querySelectorAll('iframe[src]')) {
+      let host = '';
+      try { host = new URL(f.src, location.href).hostname; } catch {}
+      if (isAdHost(host)) units.add(slotAround(f));
+    }
+    const ids = [];
+    for (const u of units) {
+      if (u.hasAttribute('data-lpz-id') || u.closest('[data-lpz-id]') || u.querySelector('[data-lpz-id]')) continue;
+      if (u.closest(NEVER_AD) || u.querySelector(NEVER_AD.replace('button, ', '')) || overlayHost.contains(u)) continue;
+      if ([...units].some((o) => o !== u && o.contains(u))) continue; // the outermost slot only
+      if (!rendered(u)) continue;
+      u.setAttribute('data-lpz-ad', '');
+      const id = register([u], norm(u.textContent) || 'Ad slot');
+      adSlots.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }
+
   /** Find new blocks; returns their ids. Blocks already registered are kept. */
   function scan() {
     for (const [id, b] of blocks) {
@@ -150,6 +200,7 @@
         scores.delete(id);
         restored.delete(id);
         labels.delete(id);
+        adSlots.delete(id);
       }
     }
     const added = [];
@@ -166,6 +217,7 @@
         added.push(register(els, text));
       }
     }
+    added.push(...findAdSlots());
     (function walk(el, inStories) {
       let last = null; // the block before this point among el's children
       let captions = []; // captions waiting for the next block
@@ -264,6 +316,9 @@
 
   function enqueue(ids) {
     ids = ids.filter((id) => blocks.has(id));
+    // Ad slots are never sent to a scorer: they are judged by structure.
+    for (const id of ids) if (adSlots.has(id)) scores.set(id, adSlotScore(id, priorities()));
+    ids = ids.filter((id) => !adSlots.has(id));
     if (ids.length === 0) return;
     if (state.settings.scorer === 'lexical') {
       scorerId = LEXICAL_SCORER_ID;

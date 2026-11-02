@@ -37,6 +37,9 @@ No build step and no runtime dependencies: load the directory unpacked.
   pass; on a mismatch everything is restored.
 - **Never zapped:** page chrome and controls, corrections and primary sources,
   and any block the scorer returned nothing for.
+- **Ad slots** (core/segment.js `adSlotScore`) are judged by structure, not
+  text, and are zapped only when the lens has a negative interest about ads;
+  otherwise they are unscored and never zapped.
 - **Local only.** The model endpoint must be loopback (`isLoopbackEndpoint`).
   The extension makes no other network requests.
 - **Lenses stay history-free.** Nothing about pages read goes into a lens.

@@ -162,7 +162,7 @@ for (const url of targets) {
         if (!byId.has(id)) byId.set(id, []);
         byId.get(id).push(el);
       }
-      const AD_HINT = '[id*="ad-" i], [id^="ad" i], [class*="ad-slot" i], [class*="advert" i], [class*="sponsor" i], [class*="promoted" i], [data-ad], [data-ad-slot], [aria-label*="advert" i], [aria-label*="sponsor" i]';
+      const AD_HINT = '[data-lpz-ad], [id*="ad-" i], [id^="ad" i], [class*="ad-slot" i], [class*="advert" i], [class*="sponsor" i], [class*="promoted" i], [data-ad], [data-ad-slot], [aria-label*="advert" i], [aria-label*="sponsor" i]';
       return [...byId.entries()].map(([id, els]) => {
         const text = norm(els.map((e) => e.textContent).join(' '));
         const linkText = norm(els.flatMap((e) => [...e.querySelectorAll('a')].map((a) => a.textContent)).join(' '));
@@ -175,7 +175,9 @@ for (const url of targets) {
           linkShare: text ? Math.round((linkText.length / text.length) * 100) / 100 : 0,
           top: Math.round(r.top + scrollY),
           height: Math.round(r.height),
-          adHint: els.some((e) => !!e.closest(AD_HINT))
+          adHint: els.some((e) => !!e.closest(AD_HINT)),
+          // Found as an ad slot by the extension's own structural check.
+          adSlot: els.some((e) => e.hasAttribute('data-lpz-ad'))
         };
       });
     });

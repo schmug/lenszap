@@ -6,7 +6,8 @@
      and story is invented. Each element with data-expect says what it should be:
        data-expect="block"  one block of its own (its id is the block's first element);
        data-expect="none"   inside no block (page chrome, never zapped);
-       data-expect="with:X" in the same block as the element with id X. -->
+       data-expect="with:X" in the same block as the element with id X;
+       data-expect="ad"     an ad slot: a block of its own, marked data-lpz-ad. -->
 <html lang="en">
 <head><meta charset="utf-8"><title>Splitter fixture (fictional)</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;max-width:900px;margin:20px auto;padding:0 16px} .card{border:1px solid #ddd;padding:8px;margin:8px 0}</style>
@@ -76,6 +77,16 @@
     <blockquote id="post-quote" data-expect="with:post-lead">Every school will know who to call, what to switch off, and how to keep teaching while the systems are down.</blockquote>
     <p id="post-tags" data-expect="none"># 4:49 pm / <a href="/t/1">schools</a>, <a href="/t/2">security</a>, <a href="/t/3">plans</a>, <a href="/t/4">county</a></p>
   </article>
+
+  <!-- Display ads: image banners with only an "Advertisement" label, an empty labelled
+       slot, and an ad-network iframe. Each is an ad slot (a block marked data-lpz-ad). -->
+  <div class="site-ad3" id="ad-banner" data-expect="ad"><div class="a-statement">Advertisement</div><a href="https://sponsor.example/"><img alt="" width="600" height="90" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a></div>
+  <div class="widget" id="sidebar_ad" data-expect="ad"><div class="a-statement">Advertisement</div><a href="https://other.example/"><img alt="" width="300" height="250" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a></div>
+  <div class="widget" id="empty-slot" style="width:300px;height:250px" data-expect="ad"><div class="a-statement">Advertisement</div></div>
+  <div id="net-ad" data-expect="ad"><iframe src="https://ad.doubleclick.net/fixture" width="300" height="250" title="3rd party ad content"></iframe></div>
+  <!-- Not ads: a story that mentions advertising, and a "load more" control with "ad" in its class. -->
+  <p id="ad-story" data-expect="block">The county's advertising budget for the new transit map was cut in half at Tuesday's meeting, the clerk said.</p>
+  <div class="load-more" id="more-link" data-expect="none"><img alt="" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="> More</div>
 
   <aside class="card" id="cats" data-expect="none">
     <h2>Story categories</h2>

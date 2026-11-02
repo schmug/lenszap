@@ -319,6 +319,8 @@ const splitProblems = await page.evaluate(() => {
     const name = el.id || el.textContent.trim().slice(0, 30);
     if (want === 'none' && (got || el.querySelector('[data-lpz-id]'))) bad.push(`${name}: should be in no block`);
     if (want === 'block' && el.getAttribute('data-lpz-id') == null) bad.push(`${name}: should be a block (is in ${got})`);
+    if (want === 'ad' && (el.getAttribute('data-lpz-id') == null || !el.hasAttribute('data-lpz-ad'))) bad.push(`${name}: should be an ad slot`);
+    if (want !== 'ad' && (el.hasAttribute('data-lpz-ad') || el.closest('[data-lpz-ad]'))) bad.push(`${name}: should not be an ad slot`);
     if (want.startsWith('with:') && (!got || got !== blockOf(document.getElementById(want.slice(5))))) bad.push(`${name}: should be with ${want.slice(5)} (is in ${got})`);
   }
   return bad;
