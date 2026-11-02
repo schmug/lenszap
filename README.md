@@ -10,7 +10,8 @@ On every page the zapper splits the content into blocks, judges how well each bl
 
 ## What it does
 
-- **Zaps off-lens blocks.** Each block gets an "off-lens" confidence. A block is hidden when that confidence reaches your threshold. Interests you weight positively keep blocks; interests you weight negatively zap them.
+- **Zaps off-lens blocks.** Each block gets an "off-lens" confidence. A block is hidden when that confidence reaches your threshold. Interests you weight negatively ("less of this") zap the blocks that match them. Blocks that match none of your interests stay, unless you turn on **Settings → Also hide blocks that match none of my interests**, which hides everything not about an interest you weighted up.
+- **Zaps display ads, if you ask.** Image and iframe ads have no text to score, so the zapper finds ad slots by structure: an "Advertisement" or "Sponsored" label, an ad marker in the element's id or class, or an iframe from an ad network, around almost no text. An ad slot is hidden only when your lens has a "less of this" interest about ads (for example `advertisements` with a negative weight). Otherwise it is left alone.
 - **Side panel.** The controls live in Chrome's side panel: click the toolbar button to open it. Chrome docks it beside the page and the page reflows to fit, like any browser sidebar. It follows whichever tab you're on, with five tabs: **Ledger**, **Interests**, **Train**, **Lens**, and **Settings**. With the panel closed, the toolbar badge still shows how many blocks are hidden on the page.
 - **Ledger.** The panel lists every hidden block, with its off-lens score, with the reason it was hidden and a **Show** button. After every pass the zapper checks that the blocks hidden on the page are exactly the ones in the ledger. If they ever differ, it restores everything and says so.
 - **Before / After.** **Before** shows the page as published, with zapped blocks outlined in red.
@@ -105,6 +106,57 @@ ollama pull qwen3:4b
 
 Then choose the **Chat model via Ollama** API with endpoint `http://localhost:11434` and model `qwen3:4b`.
 
+## Measuring it on real pages
+
+The benchmark above scores 28 hand-written passages. The eval scores real pages, split into blocks by the extension's own splitter, against labels you give them. It reports:
+- how often a block you wanted was hidden;
+- how often an off-lens block or an ad stayed;
+- whether a correction was ever hidden (this must never happen);
+- how often the splitter made a bad block;
+- how long the model took per block.
+
+```
+npm install && npx playwright install chromium  # once
+npm run capture -- --list eval/sites.txt        # or name URLs; add --headed if a site blocks headless browsers
+npm run label                                   # opens a labelling page at http://127.0.0.1:8765/
+npm run eval                                    # word-only baseline
+npm run eval -- --api systemone --show          # plus your llama-server model, listing every mistake
+npm run eval -- --api systemone --endpoint http://127.0.0.1:8181   # llama-server on another port
+npm run eval -- --lens my-lens.json --at 0.7    # your own lens, detail at a 70% threshold
+npm run eval -- --lens my-lens.json --hide-unmatched   # also hide blocks that match none of your interests
+npm run eval -- --api systemone --zap-ads      # with a "less of this" priority for ads added
+npm run capture -- --resplit                    # after a splitter change: re-split the saved pages
+```
+
+Each capture also saves the page's HTML, with scripts removed, to `eval/data/snapshots/`. `--resplit` splits those snapshots again with the current splitter instead of fetching the sites. A block whose text didn't change keeps its label. A block cut out of one labelled block inherits that label, unless that block was labelled mixed. The capture lists how many blocks are left to label.
+
+The first real eval (12 pages, 508 blocks, Kev-4B) found 60–65% the best threshold for a model. At 80%, the model kept over half of what should go. So the extension's default threshold is 65% for a model and 80% for word-only scoring. Switching scorers moves the threshold to the new scorer's default, unless you had changed it. A label-first variant was also tried, which put every block into a fixed list of categories first. It kept 98% of what should go and was 5× slower, so it was removed.
+
+The labeller shows a fixed random sample of 15 blocks per page by default (or 30, or all), and moves on to the next page when you finish one. A sample measures the zapper just as fairly, so label more pages rather than more of one page.
+
+Captures and labels go to `eval/data/`, which git ignores, because captured text is the sites' own content. Label against the lens you pass with `--lens`; the labeller records which lens it was.
+
+| Label | Meaning |
+|---|---|
+| keep | On your lens; should stay |
+| zap | Matches an interest you weighted down; should be hidden |
+| neutral | Matches none of your interests; hidden only with **Also hide blocks that match none of my interests** (`--hide-unmatched`) |
+| ad | An ad or sponsored block; should be hidden |
+| evidence | A correction or primary source; must never be hidden |
+| chrome | Page chrome the splitter shouldn't have made a block |
+| mixed | Several items run together; the splitter should have split it |
+
+`eval/demo/` holds the two fictional demo pages, captured and labelled, so `npm run eval -- --data eval/demo` works without capturing anything.
+
+## Troubleshooting
+
+**Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
+- your settings and lens priorities;
+- request counts, latency, and recent errors from the model;
+- every block's scores, decision, and reasoning.
+
+It leaves out page text and the address unless you tick the box. Nothing is sent anywhere. Paste the report into an issue or a chat when something looks wrong.
+
 ## Install
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
@@ -152,6 +204,39 @@ The zapper reads these from your lens but doesn't act on them, and it lists them
 - **Pages can tell the extension is installed.** The extension exposes its own module files to pages, so a page can detect it. The controls are in the side panel, which pages can't reach, and the on-page popover is in a closed shadow root.
 - **The tool only lists what it hides.** It does not label the blocks it keeps as being on your lens.
 
+## A fast dev loop
+
+Set these once in your shell (`~/.zshrc`) so nothing needs flags. They are defaults for the dev scripts only; the extension keeps its own settings.
+
+```
+export LENSZAP_API=systemone
+export LENSZAP_ENDPOINT=http://127.0.0.1:8181   # wherever llama-server listens
+export LENSZAP_LENS=my-lens.json
+```
+
+Then, in three terminals:
+
+```
+llama-server -hf ggml-org/Kev-4B-GGUF --port 8181 --parallel 4
+npm run dev -- --site verge     # dev browser: reloads the extension and its tabs on every save
+npm run test:watch              # unit tests, re-run on every save to core/, test/, eval/
+```
+
+and, after a change, measure it:
+
+```
+npm run eval -- --site verge --show   # one page, every mistake listed
+npm run eval                          # every labelled page
+npm run capture -- --resplit          # after a splitter change, re-split the saved pages first (or --site verge)
+```
+
+- `npm run dev` opens Playwright's Chromium with the unpacked extension and `demo/fixture.html`, plus the captured snapshots named by `--site` (`--site all` for every one). It is offline: the only requests that leave the browser's pages are to this machine. `--live URL` opens a real page instead, which does go to the web. Its profile (`.dev-profile/`, git-ignored) keeps your lens and settings between runs; `--fresh` starts empty.
+- `npm run capture -- --resplit` is offline too: it serves the snapshots and refuses everything else they link to.
+- `npm run eval` caches model scores in `eval/data/cache/scores.json`, keyed by scorer, scorer code, topics, and block text. After a change to `decide.js` or the threshold, a re-run takes seconds; after a resplit or a prompt change, only new or changed blocks go to the model. Pass `--fresh` after swapping the model behind the same port.
+- Only fetching new pages (`npm run capture -- URL…`) and `--live` reach the web.
+
+Chromium itself may still try a request of its own on first start (a firewall such as Little Snitch can deny it; nothing in the loop needs it). Branded Chrome no longer loads an unpacked extension from the command line, which is why the dev browser is Chromium. In your own Chrome, load the folder once from `chrome://extensions` and press its reload button after a change.
+
 ## Tests
 
 ```
@@ -172,7 +257,9 @@ The browser check loads the unpacked extension against the fictional fixture pag
 - training: clicks mark blocks instead of following links, marks hold only scores and a label, and the panel gives a suggestion;
 - pausing a site hides nothing and shows no popover, while the panel still counts what would be hidden;
 - on a fictional page laid out in table rows (`demo/link-table.html`, served at the Hacker News hostname), each story is one block, and the top links are never judged;
+- on a fictional page of tricky layouts (`demo/splitter.html`), a repo card with its stats and Star button is one block, a multi-story card and a "Most read" list split into their stories, a caption joins its paragraph, and tag lines, category lists, and pagers are never blocks;
 - the model-scorer path works over all three APIs (against a stand-in model server), including that a block the model skips stays visible, never sends more requests at once than the setting allows, and draws the scoring spark while the model works.
+- on a long page, a model scores only the blocks near the screen and more as you scroll; the score cache lives in session storage (memory only), holds no page text, and answers a revisit without asking the model again.
 
 The check needs Playwright with Chromium and isn't run in CI.
 
@@ -190,6 +277,7 @@ lenszap/
   demo/fixture.html      a fictional page for trying it
   demo/link-table.html   a fictional table-row link page, for the site-rule check
   bench/                 benchmark: speed and wrong-zap rates for a scorer on your machine
+  eval/                  capture real pages, label their blocks, and measure mistakes (developer tool)
   test/                  Node tests and the browser check
 ```
 

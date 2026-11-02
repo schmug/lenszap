@@ -42,7 +42,7 @@ import {
 } from '../core/model-scorer.js';
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
-import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES } from '../core/segment.js';
+import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
 import { pauseScope, pauseLabel, badgeFor } from '../core/pause.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -104,6 +104,12 @@ await test('evidence heuristic catches corrections and primary sources', () => {
   assert.ok(looksLikeEvidence('Correction: an earlier version misstated the date.'));
   assert.ok(looksLikeEvidence("Editor's note: this story was updated."));
   assert.ok(!looksLikeEvidence('The match ended in a draw.'));
+  // Found on real pages by the eval: each of these was hidden before.
+  assert.ok(looksLikeEvidence('[Update: Oct. 10, 9:58 a.m. ET: A spokesperson said he was not a founder].'));
+  assert.ok(looksLikeEvidence('Federal court records show that on October 8 he was arrested.'));
+  assert.ok(looksLikeEvidence('On October 8, the U.K. issued sanctions (PDF) against the platform.'));
+  assert.ok(looksLikeEvidence('A sentencing memo filed Sept. 19 by federal prosecutors notes that...'));
+  assert.ok(!looksLikeEvidence('Software update brings a new lock screen.'), 'a bare "update" is not evidence');
 });
 
 await test('scoreLexical returns one score per block and topic', () => {
@@ -445,6 +451,93 @@ await test('groupWithFollowing takes an item and its rows up to the next stop', 
   assert.deepEqual(groupWithFollowing(rows[6], stop).map((r) => r.kind), ['more']);
 });
 
+await test('splitDecision: one titled item stays whole, several stories split, link lines are chrome', () => {
+  const base = { chars: 300, letters: 250, leafy: false, containerish: true, headings: 0, storyLinks: 0, links: 0, linkChars: 0, linkLetters: 0, severalChildren: false, hasControls: false };
+  // A repo card: one heading, a description and a stats row (several children).
+  assert.equal(splitDecision({ ...base, headings: 1, storyLinks: 1, links: 3, linkChars: 30, linkLetters: 20, severalChildren: true }), 'block');
+  // A card with no heading: one headline link, a dek, and a byline with a comment count.
+  assert.equal(splitDecision({ ...base, headings: 0, storyLinks: 1, links: 3, linkChars: 70, linkLetters: 60, severalChildren: true }), 'block');
+  // ...but a long section with one long link and several paragraphs still splits.
+  assert.equal(splitDecision({ ...base, chars: 1000, headings: 0, storyLinks: 1, links: 1, linkChars: 40, linkLetters: 35, severalChildren: true }), 'split');
+  // A card holding two teasers.
+  assert.equal(splitDecision({ ...base, headings: 2, storyLinks: 2, links: 2, linkChars: 80, linkLetters: 70 }), 'split');
+  // A "Most read" list: one title heading, many headline links.
+  assert.equal(splitDecision({ ...base, headings: 1, storyLinks: 5, links: 5, linkChars: 200, linkLetters: 170 }), 'split');
+  // Inside it, a 30-character headline is a block; outside a list of stories it is too short.
+  const headline = { ...base, chars: 30, letters: 25, containerish: true, links: 1, linkChars: 30, linkLetters: 25, storyLinks: 1, hasLink: true };
+  assert.equal(splitDecision({ ...headline, inStories: true }), 'block');
+  assert.equal(splitDecision({ ...headline, inStories: false }), 'skip');
+  // A tag line, a category list, a pager: mostly short links.
+  assert.equal(splitDecision({ ...base, chars: 62, letters: 45, leafy: true, links: 5, linkChars: 50, linkLetters: 42 }), 'skip');
+  // A whole page wrapper that is mostly short links (nav, repo names) is split, never skipped.
+  assert.equal(splitDecision({ ...base, chars: 5000, letters: 4000, links: 300, linkChars: 4000, linkLetters: 3500, storyLinks: 0 }), 'split');
+  assert.equal(splitDecision({ ...base, chars: 900, letters: 700, links: 40, linkChars: 700, linkLetters: 600, headings: 3, storyLinks: 0 }), 'split');
+  // A short sidebar of short links is chrome, even with a title heading.
+  assert.equal(splitDecision({ ...base, chars: 400, letters: 330, links: 25, linkChars: 360, linkLetters: 300, headings: 1, storyLinks: 0 }), 'skip');
+  // A paragraph with a couple of links stays a block.
+  assert.equal(splitDecision({ ...base, leafy: true, links: 2, linkChars: 30, linkLetters: 26 }), 'block');
+  // Controls inside: split, so the control is never hidden with the block.
+  assert.equal(splitDecision({ ...base, headings: 1, hasControls: true }), 'split');
+  // Too long to be one item.
+  assert.equal(splitDecision({ ...base, chars: 5000, headings: 1 }), 'split');
+});
+
+await test('carryLabels: unchanged keys keep labels, parts of one labelled block inherit, parts of a mixed block do not', async () => {
+  const { carryLabels, blockKey } = await import('../eval/lib.mjs');
+  const mk = (text) => ({ key: blockKey(text), text });
+  const repo = mk('owner / tool A tool for things. TypeScript 120 stars today');
+  const multi = mk('Story one about schools. Story two about sports.');
+  const para = mk('A paragraph that does not change at all between splits.');
+  const old = [repo, multi, para];
+  const labels = { [repo.key]: 'keep', [multi.key]: 'mixed', [para.key]: 'zap' };
+  const next = [mk('owner / tool A tool for things.'), mk('Story one about schools.'), para, mk('120 stars today')];
+  const c = carryLabels(old, labels, next);
+  assert.equal(c.labels[para.key], 'zap');
+  assert.equal(c.labels[next[0].key], 'keep');
+  assert.equal(c.labels[next[1].key], undefined);
+  assert.equal(c.labels[next[3].key], undefined, 'a small fragment does not inherit');
+  assert.deepEqual([c.kept, c.inherited, c.unlabelled], [1, 1, 2]);
+});
+
+await test('hideUnmatched: off by choice, only a "less of this" match zaps', () => {
+  const pr = [{ topic: 'cybersecurity', weight: 1 }, { topic: 'trump', weight: -0.95 }];
+  const neutral = { id: 'n', matches: { cybersecurity: 0, trump: 0 } };
+  const against = { id: 'a', matches: { cybersecurity: 0, trump: 0.9 } };
+  const on = { id: 'o', matches: { cybersecurity: 0.9, trump: 0 } };
+  const run = (hideUnmatched) => Object.fromEntries(decide({ scores: [neutral, against, on], priorities: pr, threshold: 0.65, scorer: 'x', hideUnmatched }).map((d) => [d.id, d.zap]));
+  assert.deepEqual(run(true), { n: true, a: true, o: false });
+  assert.deepEqual(run(false), { n: false, a: true, o: false });
+  assert.deepEqual(Object.fromEntries(decide({ scores: [neutral], priorities: pr, threshold: 0.65, scorer: 'x' }).map((d) => [d.id, d.zap])), { n: true }, 'decide() alone keeps the original default');
+  assert.equal(offLensConfidence(neutral.matches, pr, { hideUnmatched: false }).offLens, 0);
+});
+
+await test('eval: neutral labels count as should-go only with hideUnmatched', async () => {
+  const { compare, rates } = await import('../eval/metrics.mjs');
+  const labels = { a: 'neutral', b: 'zap', c: 'keep' };
+  const decisions = [{ key: 'a', zap: true }, { key: 'b', zap: true }, { key: 'c', zap: false }];
+  const hide = rates(compare(decisions, labels, { hideUnmatched: true }));
+  assert.deepEqual([hide.wrongZapRate, hide.missRate], [0, 0]);
+  const keep = rates(compare(decisions, labels, { hideUnmatched: false }));
+  assert.equal(keep.wrongZapRate, 0.5, 'a hidden neutral block is a wrong zap when unmatched blocks are kept');
+});
+
+await test('ad slots: markers and hosts, zapped only when the lens has a "less of this" about ads', () => {
+  for (const t of ['themonic-ad3', 'sidebar_ad', 'widget ad-slot', 'promoted-post', 'ads']) assert.equal(hasAdMarker(t), true, t);
+  for (const t of ['load-more', 'shadow', 'header', 'badge', 'download', 'thread']) assert.equal(hasAdMarker(t), false, t);
+  assert.equal(isAdHost('googleads.g.doubleclick.net'), true);
+  assert.equal(isAdHost('doubleclick.net.example.com'), false);
+  const withAds = [{ topic: 'cybersecurity', weight: 1 }, { topic: 'advertisements', weight: -1 }];
+  const [d] = decide({ scores: [adSlotScore('a', withAds)], priorities: withAds, threshold: 0.65, scorer: 'x' });
+  assert.equal(d.zap, true);
+  assert.match(d.trace, /advertisements/);
+  const noAds = [{ topic: 'cybersecurity', weight: 1 }];
+  const [k] = decide({ scores: [adSlotScore('a', noAds)], priorities: noAds, threshold: 0.65, scorer: 'x' });
+  assert.equal(k.zap, false, 'no ad interest in the lens: an ad slot is left alone');
+  // An interest that is positive about ads never zaps them.
+  const likes = [{ topic: 'advertising industry news', weight: 1 }];
+  assert.equal(adSlotScore('a', likes).unscored, true);
+});
+
 await test('scoringOrder: on screen top to bottom, then below nearest first, then above', () => {
   const vh = 800;
   const order = scoringOrder(
@@ -559,6 +652,52 @@ await test('train: toExample keeps numbers only, and skips evidence and unscored
   assert.equal(toExample({ unscored: true }, 'keep', ['a']), null);
   assert.equal(toExample({ matches: { a: 1 } }, 'maybe', ['a']), null);
   assert.deepEqual(evalTraining([ex], [{ topic: 'a', weight: 1 }], 0.8), { falseZaps: 0, missed: 0, wrong: 0, total: 1 });
+});
+
+// --- Eval tooling (eval/) -----------------------------------------------------
+
+await test('eval: compare counts wrong zaps, misses, ads, evidence, and bad splits', async () => {
+  const { compare, total, rates } = await import('../eval/metrics.mjs');
+  const labels = { a: 'keep', b: 'zap', c: 'ad', d: 'evidence', e: 'chrome', f: 'skip', g: 'zap' };
+  const c = compare(
+    [
+      { key: 'a', zap: true }, { key: 'b', zap: true }, { key: 'c', zap: false }, { key: 'd', zap: true },
+      { key: 'e', zap: true }, { key: 'f', zap: true }, { key: 'g', zap: false }, { key: 'unlabelled', zap: true }
+    ],
+    labels
+  );
+  assert.deepEqual(c.keptHidden, ['a']);
+  assert.deepEqual(c.evidenceHidden, ['d']);
+  assert.deepEqual(c.zapMissed, ['g']);
+  assert.deepEqual(c.adMissed, ['c']);
+  assert.equal(c.labelled, 6, 'skip and unlabelled blocks are not counted');
+  const r = rates(total([c, c]));
+  assert.equal(r.wrongZapRate, 1, 'both blocks that should stay were hidden');
+  assert.equal(r.missRate, 2 / 3);
+  assert.equal(r.precision, 1 / 3);
+  assert.equal(r.splitProblemRate, 1 / 6);
+  assert.deepEqual(rates(total([])), { wrongZapRate: null, missRate: null, precision: null, splitProblemRate: null });
+});
+
+await test('eval: block keys ignore whitespace, and slugs are file-safe', async () => {
+  const { blockKey, slugFor } = await import('../eval/lib.mjs');
+  assert.equal(blockKey('a  b\n c'), blockKey('a b c'));
+  assert.match(blockKey('x'), /^[0-9a-f]{12}$/);
+  assert.equal(slugFor('https://www.bbc.com/news'), 'bbc.com--news');
+  assert.match(slugFor('https://ex.com/a/../b?q=<x>'), /^[a-z0-9.-]+$/);
+});
+
+await test('eval: the demo labels match the demo captures', async () => {
+  const { loadDataset, LABELS } = await import('../eval/lib.mjs');
+  const set = loadDataset(fileURLToPath(new URL('../eval/demo', import.meta.url)));
+  assert.equal(set.length, 2);
+  for (const { slug, page, labels } of set) {
+    const keys = new Set(page.blocks.map((b) => b.key));
+    for (const [k, v] of Object.entries(labels)) {
+      assert.ok(keys.has(k), `${slug}: label for a block that is not captured: ${k}`);
+      assert.ok(v in LABELS, `${slug}: unknown label ${v}`);
+    }
+  }
 });
 
 console.log(`lenszap: ${passed} passed, ${failed} failed`);

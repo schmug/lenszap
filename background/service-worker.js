@@ -24,9 +24,17 @@ import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../c
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 import { badgeFor } from '../core/pause.js';
 
+// Default zap threshold per scorer. The word-only scorer's confidence is coarse,
+// so it waits for 80%. For a model, the first eval (Kev-4B, 508 labelled
+// blocks) found 60-65% the best balance: 80% left over half of what should go.
+const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65 };
+
 const DEFAULT_SETTINGS = {
-  threshold: 0.8,
+  threshold: DEFAULT_THRESHOLD.lexical,
   scorer: 'lexical',
+  // Blocks that match none of your interests: kept unless they match a "less
+  // of this" interest. true hides them too (the zapper's original behaviour).
+  hideUnmatched: false,
   // Display: score popover on hover, scoring and zapping animations, sidebar state.
   hoverInfo: true,
   animate: true,
@@ -56,10 +64,32 @@ async function load() {
 const sha256 = (bytes) => crypto.subtle.digest('SHA-256', bytes);
 const TRAINING_LIMIT = 500;
 
-// Model scores cached for the life of the service worker, keyed by model,
-// topics, and block text. Never persisted: the cache holds page text.
+// Model scores, keyed by a hash of model, topics, and block text, so an
+// unchanged block is never sent to the model twice. Kept in
+// chrome.storage.session: it outlives this service worker (which Chrome stops
+// after about 30 seconds idle) but lives in memory only and is gone when the
+// browser closes. Never written to disk, not even as hashes: a saved list of
+// block hashes would be a record of what was read. Values are scores only.
 const scoreCache = new Map();
 const CACHE_LIMIT = 4000;
+const CACHE_KEY = 'scoreCache';
+let cacheLoaded = null;
+let cacheSaveTimer = null;
+function loadCache() {
+  cacheLoaded ??= (async () => {
+    try {
+      const { [CACHE_KEY]: saved } = (await chrome.storage.session?.get(CACHE_KEY)) ?? {};
+      if (Array.isArray(saved)) for (const [k, v] of saved) if (!scoreCache.has(k)) scoreCache.set(k, v);
+    } catch {}
+  })();
+  return cacheLoaded;
+}
+function saveCacheSoon() {
+  clearTimeout(cacheSaveTimer);
+  cacheSaveTimer = setTimeout(() => {
+    chrome.storage.session?.set({ [CACHE_KEY]: [...scoreCache] }).catch(() => {});
+  }, 500);
+}
 
 function cacheKey(settings, topics, text) {
   let h = 0x811c9dc5;
@@ -71,9 +101,18 @@ function cacheKey(settings, topics, text) {
   return `${h.toString(16)}:${s.length}`;
 }
 
+// The last few model failures, in memory only, for the side panel's debug
+// report. No page text: the endpoint, the error, and how long it took.
+const recentErrors = [];
+function noteError(m, err, ms, blocks) {
+  recentErrors.push({ at: new Date().toISOString(), api: m.api, endpoint: m.endpoint, blocks, ms, error: String(err?.message ?? err).slice(0, 300) });
+  if (recentErrors.length > 20) recentErrors.shift();
+}
+
 async function scoreWithModel(blocks, topics) {
   const { settings } = await load();
   const m = settings.model;
+  await loadCache();
   const results = new Map();
   const todo = [];
   for (const b of blocks) {
@@ -81,14 +120,23 @@ async function scoreWithModel(blocks, topics) {
     if (hit) results.set(b.id, { ...hit, id: b.id });
     else todo.push(b);
   }
-  const fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i));
+  const t0 = Date.now();
+  let fresh;
+  try {
+    fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i));
+  } catch (err) {
+    noteError(m, err, Date.now() - t0, todo.length);
+    throw err;
+  }
   fresh.forEach((r, i) => {
     results.set(r.id, r);
     if (!r.unscored) {
       if (scoreCache.size >= CACHE_LIMIT) scoreCache.delete(scoreCache.keys().next().value);
-      scoreCache.set(cacheKey(m, topics, todo[i].text), r);
+      const { id, ...score } = r;
+      scoreCache.set(cacheKey(m, topics, todo[i].text), score);
     }
   });
+  if (fresh.length) saveCacheSoon();
   return { scores: blocks.map((b) => results.get(b.id)), scorer: modelScorerId(m) };
 }
 
@@ -129,6 +177,12 @@ const handlers = {
   async 'set-settings'({ patch }) {
     const { settings } = await load();
     const next = { ...settings, ...patch, model: { ...settings.model, ...(patch.model ?? {}) } };
+    // Switching scorer moves the threshold to the new scorer's default, unless
+    // the reader had already moved it away from the old one's.
+    if (patch.scorer && patch.scorer !== settings.scorer && patch.threshold === undefined &&
+        Math.abs(settings.threshold - (DEFAULT_THRESHOLD[settings.scorer] ?? settings.threshold)) < 1e-9) {
+      next.threshold = DEFAULT_THRESHOLD[patch.scorer] ?? settings.threshold;
+    }
     await chrome.storage.local.set({ settings: next });
     return { settings: next };
   },
@@ -217,7 +271,26 @@ const handlers = {
   async 'clear-local-state'() {
     await chrome.storage.local.remove(['draftWeights', 'sites', 'training']);
     scoreCache.clear();
+    clearTimeout(cacheSaveTimer);
+    await chrome.storage.session?.remove(CACHE_KEY);
     return { ok: true };
+  },
+
+  // Scores already cached for these blocks; blocks not in the cache are left out.
+  async 'cached-scores'({ blocks, topics }) {
+    await loadCache();
+    const { settings } = await load();
+    const scores = [];
+    for (const b of blocks) {
+      const hit = scoreCache.get(cacheKey(settings.model, topics, b.text));
+      if (hit) scores.push({ ...hit, id: b.id });
+    }
+    return { scores, scorer: modelScorerId(settings.model) };
+  },
+
+  async 'debug-info'() {
+    await loadCache();
+    return { recentErrors: [...recentErrors], cachedScores: scoreCache.size };
   },
 
   async 'score-model'({ blocks, topics }) {

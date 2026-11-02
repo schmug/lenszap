@@ -10,12 +10,18 @@
   "license": "Apache-2.0",
   "scripts": {
     "test": "node test/run-tests.mjs && node test/repo-checks.mjs",
+    "test:watch": "node --watch-path=core --watch-path=test --watch-path=eval test/run-tests.mjs",
+    "dev": "node scripts/dev.mjs",
     "bench": "node bench/bench.mjs",
     "browser-check": "node test/browser-check.mjs",
-    "check-upstream": "node scripts/check-upstream.mjs"
+    "check-upstream": "node scripts/check-upstream.mjs",
+    "capture": "node eval/capture.mjs",
+    "label": "node eval/label.mjs",
+    "eval": "node eval/run.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "playwright": "^1.63.0"
   }
 }

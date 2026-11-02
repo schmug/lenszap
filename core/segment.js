@@ -62,3 +62,97 @@ export function scoringOrder(items, viewportHeight) {
     .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1])
     .map((x) => x.id);
 }
+
+/** Shortest text for a block, and for a headline inside a list of stories. */
+export const MIN_CHARS = 40;
+export const MIN_HEADLINE_CHARS = 20;
+/** Longest container kept as one block. */
+export const MAX_CONTAINER_CHARS = 1200;
+/** Longest container that can be skipped as a line or list of short links. */
+export const LINK_LINE_MAX_CHARS = 600;
+/** Longest card without a heading kept whole on the strength of one headline link. */
+export const CARD_MAX_CHARS = 600;
+/** A link at least this long reads as a story headline, not a tag or a control. */
+export const STORY_LINK_CHARS = 25;
+
+/**
+ * Decide what the walk does with one element, from numbers the content script
+ * measures:
+ *   'skip'  - not a block and not walked into (too short, or a line of links
+ *             such as tags, categories, tabs, or a pager: page chrome, never zapped);
+ *   'block' - one block;
+ *   'split' - walk into its children.
+ *
+ * @param {{chars: number, leafy: boolean, containerish: boolean,
+ *   headings: number, storyLinks: number, links: number, linkChars: number,
+ *   letters: number, linkLetters: number,
+ *   severalChildren: boolean, hasControls: boolean, inStories?: boolean, hasLink?: boolean}} m
+ *   headings: h2–h6 inside; storyLinks: distinct links of STORY_LINK_CHARS or more;
+ *   links, linkChars: all links and their text length; letters, linkLetters:
+ *   letters (not digits or punctuation) in the text and in its links; severalChildren: two or
+ *   more children of MIN_CHARS or more; hasControls: holds an input, a form with
+ *   one, a dialog, nav, h1, or an existing block; inStories: inside a container
+ *   that was split because it holds several stories.
+ */
+export function splitDecision(m) {
+  const min = m.inStories && m.hasLink ? MIN_HEADLINE_CHARS : MIN_CHARS;
+  if (m.chars < min) return 'skip';
+  // Mostly short links: tags, categories, tabs, a pager. Only a small element:
+  // a whole page or column can be mostly short links and still hold stories.
+  const small = m.leafy || (m.chars <= LINK_LINE_MAX_CHARS && m.storyLinks === 0);
+  if (small && m.links >= 3 && m.linkLetters >= 0.7 * m.letters && m.linkChars / m.links < 20) return 'skip';
+  if (m.hasControls) return 'split';
+  if (m.leafy) return 'block';
+  if (!m.containerish || m.chars > MAX_CONTAINER_CHARS) return 'split';
+  // One titled item (a repo card, a story teaser) stays whole, whatever its parts.
+  if (m.headings === 1 && m.storyLinks <= 1) return 'block';
+  // A card with one headline link and no heading (headline, dek, byline, comment
+  // count): one item, so the byline and comment count never stand alone.
+  if (m.headings === 0 && m.storyLinks === 1 && m.chars <= CARD_MAX_CHARS) return 'block';
+  // Several headlines: a feed, a "Most read" list, a multi-story card.
+  if (m.headings >= 2 || m.storyLinks >= 2) return 'split';
+  return m.severalChildren ? 'split' : 'block';
+}
+
+// --- Ad slots ----------------------------------------------------------------
+//
+// Display ads are mostly an image or an iframe with no text to score, so a
+// text scorer never sees them. The content script finds ad slots by structure
+// instead: an "Advertisement" or "Sponsored" label, an ad marker in the id or
+// class (themonic-ad3, sidebar_ad, ad-slot), or an iframe from an ad network,
+// in an element with almost no text of its own. An ad slot is zapped only when
+// the lens has a "less of this" interest about ads; otherwise it is left alone
+// like any block the scorer said nothing about.
+
+/** An ad slot has at most this much text (its "Advertisement" label, a caption). */
+export const AD_SLOT_MAX_CHARS = 80;
+/** A label that marks the element it sits in as an ad. */
+export const AD_LABEL = /^(advertisement|advertising|sponsored|sponsor|ad|ads|promoted|paid (content|post|partner))$/i;
+const AD_TOKEN = /(^|[-_])(ad|ads|advert|adverts|advertisement|adslot|ad-slot|sponsor|sponsored|promoted)\d*($|[-_])/i;
+const AD_HOSTS = /(^|\.)(doubleclick\.net|googlesyndication\.com|googleadservices\.com|adnxs\.com|amazon-adsystem\.com|taboola\.com|outbrain\.com|criteo\.(com|net)|adsrvr\.org|pubmatic\.com|rubiconproject\.com|carbonads\.(com|net)|buysellads\.com|media\.net)$/i;
+/** A lens topic about ads, e.g. "advertisements", "ads and sponsored posts". */
+export const AD_TOPIC = /\b(ads?|adverts?|advertis\w*|sponsor\w*|promoted)\b/i;
+
+/** Does an id or class list carry an ad marker (themonic-ad3, sidebar_ad, ad-slot)? */
+export function hasAdMarker(idAndClass) {
+  return String(idAndClass ?? '').split(/\s+/).some((t) => t && AD_TOKEN.test(t));
+}
+
+/** Is this an ad network's host? */
+export function isAdHost(host) {
+  return AD_HOSTS.test(String(host ?? ''));
+}
+
+/**
+ * The score for an ad slot: a strong match to the lens's ad topic, or unscored
+ * (never zapped) when the lens has no "less of this" interest about ads.
+ * @param {string} id
+ * @param {{topic: string, weight: number}[]} priorities
+ */
+export function adSlotScore(id, priorities) {
+  const matches = Object.fromEntries(priorities.map((p) => [p.topic, 0]));
+  const adTopics = priorities.filter((p) => p.weight < 0 && AD_TOPIC.test(p.topic));
+  if (adTopics.length === 0) return { id, matches, evidence: false, unscored: true, adSlot: true };
+  for (const p of adTopics) matches[p.topic] = 0.95;
+  return { id, matches, evidence: false, adSlot: true };
+}

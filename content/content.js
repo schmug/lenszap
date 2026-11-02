@@ -26,7 +26,7 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder }, { toExample }, { pauseScope, pauseLabel }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
@@ -51,6 +51,7 @@
   let decisionById = new Map();
   let scorerId = state.settings.scorer === 'lexical' ? LEXICAL_SCORER_ID : 'model (not yet run)';
   let modelError = null;
+  const requestLog = []; // last model requests on this page: { n, ms, ok }, for the debug report
   let ledgerFailure = null;
   let nextId = 1;
   // Slider positions the side panel is previewing on this page, before they are stored.
@@ -72,13 +73,10 @@
 
   // --- Segmentation ----------------------------------------------------------
 
-  const MIN_CHARS = 40;
-  const MAX_CONTAINER_CHARS = 1200;
   // Text elements: always one block, however long.
   const LEAFY = new Set(['P', 'BLOCKQUOTE', 'PRE', 'DD', 'FIGCAPTION']);
-  // Elements that are one block when short and holding one item, and are
-  // split into their children otherwise. A table cell holding a whole list of
-  // stories is a container, not a paragraph.
+  // Elements that may be one block (one item, short enough) or be split into
+  // their children; core/segment.js splitDecision decides which.
   const CONTAINER = new Set(['ARTICLE', 'SECTION', 'ASIDE', 'DIV', 'TR', 'TD', 'LI', 'FIGURE', 'UL', 'OL']);
   // Never zapped and never descended into: page controls and chrome.
   const STRUCTURAL = [
@@ -89,18 +87,55 @@
     '[role="menu"]', '[aria-modal="true"]', '[contenteditable="true"]',
     ...(rule?.structural ? [rule.structural] : [])
   ].join(',');
-  // A container holding one of these is split into its parts instead.
+  // A container holding one of these is split into its parts instead. A form
+  // that is only buttons (a Star or Follow button on a card) does not count:
+  // it goes with its item.
+  const TEXT_INPUT = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"])';
   const SPLIT_IF_CONTAINS = [
-    'h1, form, input, textarea, select, dialog, [role="dialog"], nav, [data-lpz-id]',
+    `h1, form:has(${TEXT_INPUT}, textarea, select), ${TEXT_INPUT}, textarea, select, dialog, [role="dialog"], nav, [data-lpz-id]`,
     ...(rule?.structural ? [rule.structural] : [])
   ].join(',');
+  // Image captions are not blocks of their own: they join the nearest block.
+  const CAPTION = 'figure, figcaption, [class*="caption" i]';
 
   const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
-  function hasSeveralItems(el) {
-    let n = 0;
-    for (const c of el.children) if (norm(c.textContent).length >= MIN_CHARS && ++n >= 2) return true;
-    return false;
+  const letterCount = (s) => (s.match(/\p{L}/gu) ?? []).length;
+
+  /** The numbers splitDecision needs, measured on one element. */
+  function measure(el, text, inStories) {
+    const tag = el.tagName;
+    const role = el.getAttribute('role');
+    const anchors = el.tagName === 'A' ? [el] : [...el.querySelectorAll('a[href]')];
+    let linkChars = 0;
+    let linkLetters = 0;
+    const storyHrefs = new Set();
+    for (const a of anchors) {
+      const at = norm(a.textContent);
+      const t = at.length;
+      linkChars += t;
+      linkLetters += letterCount(at);
+      // "/story" and "/story#comments" are one story.
+      if (t >= STORY_LINK_CHARS) storyHrefs.add(String(a.getAttribute('href') ?? '').replace(/#.*$/, '').replace(/\/$/, ''));
+    }
+    let several = 0;
+    for (const c of el.children) if (norm(c.textContent).length >= MIN_CHARS) several++;
+    return {
+      chars: text.length,
+      leafy: LEAFY.has(tag),
+      // A link that wraps a whole card, and custom elements (<story-card>), are items too.
+      containerish: CONTAINER.has(tag) || tag === 'A' || tag.includes('-') || role === 'article' || role === 'listitem',
+      headings: el.querySelectorAll('h2, h3, h4, h5, h6, [role="heading"]').length,
+      storyLinks: storyHrefs.size,
+      links: anchors.length,
+      linkChars,
+      letters: letterCount(text),
+      linkLetters,
+      severalChildren: several >= 2,
+      hasControls: !!el.querySelector(SPLIT_IF_CONTAINS),
+      inStories,
+      hasLink: anchors.length > 0
+    };
   }
 
   function register(els, text) {
@@ -110,14 +145,78 @@
     return id;
   }
 
+  // --- Ad slots: found by structure, since a display ad has no text to score ---
+
+  const adSlots = new Set(); // block ids that are ad slots
+  const NEVER_AD = 'nav, form, dialog, menu, button, [role="dialog"], [role="navigation"], [role="menu"], [contenteditable="true"]';
+  const hasMedia = (el) => el.matches('img, iframe, picture, video') || !!el.querySelector('img, iframe, picture, video');
+  const rendered = (el) => el.getClientRects().length > 0 && el.getBoundingClientRect().width * el.getBoundingClientRect().height >= 1000;
+
+  /** The largest element around `el` that still holds almost no text and is not
+   *  much bigger than the ad itself (so a page column holding an ad is not taken). */
+  function slotAround(el) {
+    let unit = el;
+    const r = el.getBoundingClientRect();
+    for (let p = el.parentElement; p && p !== document.body && !p.matches('main, article, [role="main"]'); p = p.parentElement) {
+      if (norm(p.textContent).length > AD_SLOT_MAX_CHARS || p.hasAttribute('data-lpz-id')) break;
+      const q = p.getBoundingClientRect();
+      if (q.height > r.height * 1.5 + 60 || q.width > r.width * 1.5 + 60) break;
+      unit = p;
+    }
+    return unit;
+  }
+
+  function findAdSlots() {
+    const units = new Set();
+    // An "Advertisement" or "Sponsored" label: the element it labels is an ad.
+    for (const el of document.body.querySelectorAll('div, span, p, small, aside, section, figcaption')) {
+      if (el.children.length > 2 || !AD_LABEL.test(norm(el.textContent))) continue;
+      const parent = el.parentElement;
+      if (parent && parent !== document.body && norm(parent.textContent).length <= AD_SLOT_MAX_CHARS) units.add(slotAround(parent));
+    }
+    // An ad marker in the id or class, around an image or iframe.
+    for (const el of document.body.querySelectorAll('[id*="ad" i], [class*="ad" i], [id*="sponsor" i], [class*="sponsor" i], [class*="promoted" i]')) {
+      if (!hasAdMarker(`${el.id} ${el.getAttribute('class') ?? ''}`)) continue;
+      if (norm(el.textContent).length <= AD_SLOT_MAX_CHARS && hasMedia(el)) units.add(slotAround(el));
+    }
+    // An iframe from an ad network.
+    for (const f of document.body.querySelectorAll('iframe[src]')) {
+      let host = '';
+      try { host = new URL(f.src, location.href).hostname; } catch {}
+      if (isAdHost(host)) units.add(slotAround(f));
+    }
+    const ids = [];
+    for (const u of units) {
+      if (u.hasAttribute('data-lpz-id') || u.closest('[data-lpz-id]') || u.querySelector('[data-lpz-id]')) continue;
+      if (u.closest(NEVER_AD) || u.querySelector(NEVER_AD.replace('button, ', '')) || overlayHost.contains(u)) continue;
+      if ([...units].some((o) => o !== u && o.contains(u))) continue; // the outermost slot only
+      if (!rendered(u)) continue;
+      u.setAttribute('data-lpz-ad', '');
+      const id = register([u], norm(u.textContent) || 'Ad slot');
+      adSlots.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }
+
   /** Find new blocks; returns their ids. Blocks already registered are kept. */
   function scan() {
+    // An ad slot that has since filled with text (stories loaded into it) is not
+    // an ad slot any more: let the walk split it like anything else.
+    for (const id of adSlots) {
+      const b = blocks.get(id);
+      if (b && norm(b.els.map((e) => e.textContent).join(' ')).length > AD_SLOT_MAX_CHARS) {
+        for (const el of b.els) for (const a of [...el.attributes]) if (a.name.startsWith('data-lpz-')) el.removeAttribute(a.name);
+        blocks.delete(id); scores.delete(id); adSlots.delete(id);
+      }
+    }
     for (const [id, b] of blocks) {
       if (!b.els.some((el) => el.isConnected)) {
         blocks.delete(id);
         scores.delete(id);
         restored.delete(id);
         labels.delete(id);
+        adSlots.delete(id);
       }
     }
     const added = [];
@@ -134,26 +233,53 @@
         added.push(register(els, text));
       }
     }
-    (function walk(el) {
+    added.push(...findAdSlots());
+    (function walk(el, inStories) {
+      let last = null; // the block before this point among el's children
+      let captions = []; // captions waiting for the next block
+      let leadIn = null; // a block ending in a colon, waiting for what it introduces
+      const attach = (id, els) => {
+        const b = blocks.get(id);
+        for (const c of els) { c.setAttribute('data-lpz-id', id); b.els.push(c); }
+      };
       for (const child of el.children) {
         if (child === overlayHost || child.hasAttribute('data-lpz-id')) continue;
         if (child.matches(STRUCTURAL)) continue;
         const text = norm(child.textContent);
-        if (text.length < MIN_CHARS) continue;
-        if (child.getClientRects().length === 0) continue; // not rendered
-        const tag = child.tagName;
-        const role = child.getAttribute('role');
-        const containerish = CONTAINER.has(tag) || role === 'article' || role === 'listitem';
-        // A container of several text-bearing children (a list, a sidebar of
-        // cards, a comment thread) is split so each item is judged on its own.
-        const selectable =
-          (LEAFY.has(tag) ||
-            (containerish && text.length <= MAX_CONTAINER_CHARS && !hasSeveralItems(child))) &&
-          !child.querySelector(SPLIT_IF_CONTAINS);
-        if (selectable) added.push(register([child], text));
-        else walk(child);
+        if (text.length < MIN_HEADLINE_CHARS) continue;
+        if (child.getClientRects().length === 0) {
+          // A display:contents wrapper has no box of its own but shows its children.
+          if (getComputedStyle(child).display === 'contents') walk(child, inStories);
+          continue; // otherwise not rendered
+        }
+        // Too long to be one block: walk in without measuring (measuring every
+        // level of a big page is slow, and the answer is always 'split').
+        if (!LEAFY.has(child.tagName) && text.length > MAX_CONTAINER_CHARS) {
+          walk(child, inStories);
+          continue;
+        }
+        const m = measure(child, text, inStories);
+        const what = splitDecision(m);
+        if (what === 'block' && child.matches(CAPTION) && !m.headings) {
+          if (last) attach(last, [child]);
+          else captions.push(child);
+        } else if (what === 'block' && leadIn && LEAFY.has(child.tagName)) {
+          // The quote or list a lead-in sentence introduces joins its block.
+          attach(leadIn, [child]);
+          blocks.get(leadIn).text += ` ${text}`;
+          leadIn = null;
+        } else if (what === 'block') {
+          last = register([child], text);
+          added.push(last);
+          if (captions.length) { attach(last, captions); captions = []; }
+          // "…said on Hacker News:" introduces what follows; keep them together.
+          leadIn = child.tagName === 'P' && /:$/.test(text) ? last : null;
+        } else if (what === 'split') {
+          leadIn = null;
+          walk(child, inStories || m.headings >= 2 || m.storyLinks >= 2);
+        }
       }
-    })(document.body);
+    })(document.body, false);
     return added;
   }
 
@@ -161,7 +287,17 @@
 
   const queue = []; // ids waiting for the model
   const active = new Set(); // ids being scored right now
-  const progress = { done: 0, total: 0 };
+  // Blocks within this many screens below the visible area (half that above)
+  // are scored now; the rest wait until the reader scrolls near them.
+  const AHEAD_SCREENS = 1.5;
+  const near = new Set(); // queued ids close enough to score now
+  const progress = { done: 0 };
+  // total: blocks answered, being answered, and waiting near the screen. Blocks
+  // further down are not counted, so the bar finishes when what you can reach is done.
+  const progressNow = () => {
+    const nearQueued = queue.filter((id) => near.has(id)).length;
+    return { done: progress.done, total: progress.done + active.size + nearQueued, later: queue.length - nearQueued };
+  };
   let inFlight = 0;
   let generation = 0; // bumped to drop answers from a superseded run
 
@@ -178,10 +314,27 @@
       return { id, top: r.top, bottom: r.bottom };
     });
     queue.splice(0, queue.length, ...scoringOrder(items, innerHeight));
+    near.clear();
+    for (const it of items) {
+      if (it.top < innerHeight * (1 + AHEAD_SCREENS) && it.bottom > -innerHeight * (AHEAD_SCREENS / 2)) near.add(it.id);
+    }
+  }
+
+  /** Take up to n queued ids that are near the screen, in scoring order. */
+  function takeNear(n) {
+    const out = [];
+    for (let i = 0; i < queue.length && out.length < n; ) {
+      if (near.has(queue[i])) out.push(...queue.splice(i, 1));
+      else i++;
+    }
+    return out;
   }
 
   function enqueue(ids) {
     ids = ids.filter((id) => blocks.has(id));
+    // Ad slots are never sent to a scorer: they are judged by structure.
+    for (const id of ids) if (adSlots.has(id)) scores.set(id, adSlotScore(id, priorities()));
+    ids = ids.filter((id) => !adSlots.has(id));
     if (ids.length === 0) return;
     if (state.settings.scorer === 'lexical') {
       scorerId = LEXICAL_SCORER_ID;
@@ -189,16 +342,29 @@
       return;
     }
     queue.push(...ids);
-    progress.total += ids.length;
     sortQueue();
-    pump();
+    // Blocks scored before (on this page or another, since the browser
+    // started) come back from the cache at once, wherever they are on the page.
+    const gen = generation;
+    send('cached-scores', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
+      .then((res) => {
+        if (gen !== generation || !res?.scores?.length) return;
+        scorerId = res.scorer;
+        const hit = new Set();
+        for (const s of res.scores) if (blocks.has(s.id)) { scores.set(s.id, s); hit.add(s.id); }
+        for (let i = queue.length - 1; i >= 0; i--) if (hit.has(queue[i])) queue.splice(i, 1);
+        apply();
+      })
+      .catch(() => {})
+      .finally(() => { if (gen === generation) pump(); });
   }
 
   function stopScoring() {
     queue.length = 0;
     active.clear();
     drawSparks();
-    progress.done = progress.total = 0;
+    near.clear();
+    progress.done = 0;
   }
 
   function pump() {
@@ -208,21 +374,30 @@
     // A decision model answers one block per request; a chat model takes a few.
     const per = m.api === 'systemone' ? 1 : 6;
     while (!modelError && inFlight < limit && queue.length) {
-      const ids = queue.splice(0, per).filter((id) => blocks.has(id));
+      const taken = takeNear(per);
+      if (taken.length === 0) break; // the rest wait until the reader scrolls near them
+      const ids = taken.filter((id) => blocks.has(id));
       if (ids.length === 0) continue;
       inFlight++;
       ids.forEach((id) => active.add(id));
       drawSparks();
+      const sentAt = performance.now();
+      const logRequest = (ok) => {
+        requestLog.push({ n: ids.length, ms: Math.round(performance.now() - sentAt), ok });
+        if (requestLog.length > 200) requestLog.shift();
+      };
       send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
         .then((res) => {
           if (gen !== generation) return;
           if (!res || res.error) throw new Error(res?.error ?? 'no answer from the extension');
+          logRequest(true);
           scorerId = res.scorer;
           for (const s of res.scores) if (s) scores.set(s.id, s);
         })
         .catch((err) => {
           // Blocks without scores are never zapped: a failed model hides nothing.
           if (gen === generation) {
+            logRequest(false);
             modelError = String(err?.message ?? err);
             stopScoring();
           }
@@ -233,7 +408,7 @@
           ids.forEach((id) => active.delete(id));
           drawSparks();
           progress.done += ids.length;
-          if (!queue.length && !inFlight) progress.done = progress.total = 0;
+          if (!inFlight && progressNow().total === progress.done) progress.done = 0;
           apply();
           pump();
         });
@@ -295,7 +470,7 @@
     // the panel can say what would be hidden, but nothing on the page changes.
     decisions = ledgerFailure
       ? []
-      : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored });
+      : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored, hideUnmatched: state.settings.hideUnmatched === true });
     decisionById = new Map(decisions.map((d) => [d.id, d]));
     const zap = new Set(paused() ? [] : decisions.filter((d) => d.zap).map((d) => d.id));
     for (const [id, b] of blocks) setZap(b, zap.has(id));
@@ -332,7 +507,7 @@
       host,
       blocks: blocks.size,
       scorer: scorerId,
-      progress: { ...progress },
+      progress: progressNow(),
       modelError,
       ledgerFailure: !!ledgerFailure,
       paused: paused(),
@@ -381,8 +556,59 @@
     else for (const [id, l] of labels) if (blocks.has(id)) setAttr(blocks.get(id), 'data-lpz-label', l);
   }
 
+  /**
+   * Everything needed to troubleshoot this page, for the side panel's debug
+   * report. Page text is included only when the reader asks for it.
+   */
+  function debugReport({ text = false } = {}) {
+    const byId = new Map(decisions.map((d) => [d.id, d]));
+    const ms = requestLog.filter((r) => r.ok).map((r) => r.ms).sort((a, b) => a - b);
+    return {
+      host,
+      url: text ? location.href : undefined,
+      extension: chrome.runtime.getManifest().version,
+      generated: new Date().toISOString(),
+      scorer: scorerId,
+      settings: {
+        scorer: state.settings.scorer,
+        threshold: threshold(),
+        model: state.settings.scorer === 'model' ? { ...state.settings.model } : undefined
+      },
+      site: { rule: rule?.name ?? null, paused: paused() },
+      lens: { id: state.lens.id, version: state.lens.metadata?.lensVersion, priorities: priorities() },
+      progress: { ...progressNow(), queued: queue.length, inFlight },
+      modelError,
+      ledgerFailure: ledgerFailure ?? null,
+      requests: {
+        count: requestLog.length,
+        failed: requestLog.filter((r) => !r.ok).length,
+        medianMs: ms.length ? ms[Math.floor(ms.length / 2)] : null,
+        p95Ms: ms.length ? ms[Math.min(ms.length - 1, Math.floor(ms.length * 0.95))] : null,
+        recent: requestLog.slice(-20)
+      },
+      blocks: [...blocks].map(([id, b]) => {
+        const d = byId.get(id);
+        const s = scores.get(id);
+        return {
+          id,
+          tag: b.els[0].tagName.toLowerCase(),
+          chars: b.text.length,
+          zap: d?.zap ?? false,
+          offLens: d?.offLens ?? null,
+          exempt: d?.exempt ?? null,
+          matches: s?.matches ?? null,
+          evidence: s?.evidence ?? null,
+          unscored: s?.unscored ?? !s,
+          trace: d?.trace ?? null,
+          text: text ? b.text.slice(0, 300) : undefined
+        };
+      })
+    };
+  }
+
   const pageActions = {
     get: () => snapshot(),
+    debug: ({ text }) => debugReport({ text }),
     restore: ({ id }) => { restored.add(id); apply(); showBlock(id); },
     unrestore: ({ id }) => { restored.delete(id); apply(); },
     'restore-all': () => { decisions.filter((d) => d.zap).forEach((d) => restored.add(d.id)); apply(); },
@@ -634,8 +860,9 @@
   let sortTimer = null;
   addEventListener('scroll', () => {
     if (!queue.length || sortTimer) return;
-    sortTimer = setTimeout(() => { sortTimer = null; sortQueue(); }, 300);
+    sortTimer = setTimeout(() => { sortTimer = null; sortQueue(); pump(); }, 300);
   }, { passive: true });
+  addEventListener('resize', () => { if (queue.length) { sortQueue(); pump(); } }, { passive: true });
 
   // --- Run, and keep up with the page -------------------------------------------
 

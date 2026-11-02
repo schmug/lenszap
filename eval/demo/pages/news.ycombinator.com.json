@@ -1,0 +1,58 @@
+{
+  "url": "https://news.ycombinator.com/",
+  "host": "news.ycombinator.com",
+  "captured": "2026-11-01",
+  "splitter": "lenszap@0.2.0",
+  "blocks": [
+    {
+      "key": "74d8c7980ba7",
+      "tag": "tr",
+      "text": "1.Lakeview district publishes its ransomware recovery report (example.org) 212 points by quill 4 hours ago | 88 comments",
+      "links": 1,
+      "linkShare": 0.48,
+      "top": 41,
+      "height": 17,
+      "adHint": false
+    },
+    {
+      "key": "b0271effcfee",
+      "tag": "tr",
+      "text": "2.Show: a local-first notes app with a new sync engine (example.net) 140 points by marlo 6 hours ago | 51 comments",
+      "links": 1,
+      "linkShare": 0.46,
+      "top": 81,
+      "height": 17,
+      "adHint": false
+    },
+    {
+      "key": "16ee75bd4211",
+      "tag": "tr",
+      "text": "3.Pop star's surprise wedding sends fans into a frenzy (example.com) 9 points by rook 2 hours ago | 3 comments",
+      "links": 1,
+      "linkShare": 0.47,
+      "top": 121,
+      "height": 17,
+      "adHint": false
+    },
+    {
+      "key": "55896bdff7ed",
+      "tag": "tr",
+      "text": "4.Otters beat the Herons in the regional football final (example.com) 12 points by finch 3 hours ago | 7 comments",
+      "links": 1,
+      "linkShare": 0.47,
+      "top": 161,
+      "height": 17,
+      "adHint": false
+    },
+    {
+      "key": "e98689134661",
+      "tag": "tr",
+      "text": "5.Ask: how do your schools handle data privacy for student records? 77 points by wren 5 hours ago | 64 comments",
+      "links": 1,
+      "linkShare": 0.59,
+      "top": 201,
+      "height": 17,
+      "adHint": false
+    }
+  ]
+}

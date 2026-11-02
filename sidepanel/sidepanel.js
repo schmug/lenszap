@@ -121,10 +121,12 @@ function renderHeader() {
   else if (page.paused) {
     count.textContent = `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')} · ${page.wouldZap.length} would be hidden`;
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
+    if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
   }
   else {
     count.append(h('strong', { text: String(page.zapped.length) }), ` hidden of ${page.blocks}`);
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
+    if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
   }
   const scope = pausedBy();
   const banner = $('paused');
@@ -371,7 +373,7 @@ async function renderTrain(message) {
     h('p', { class: 'note', text: 'Each mark stores only the scores for that block, never its text or the page it came from, on this device only. Marks made with one scorer may not suit another.' })
   ];
 
-  const s = suggest(examples, priorities(), threshold());
+  const s = suggest(examples, priorities(), threshold(), { hideUnmatched: state.settings.hideUnmatched === true });
   if (s.needMore) {
     parts.push(h('p', { class: 'note', text: `Mark ${s.needMore} more block${s.needMore === 1 ? '' : 's'} to get a suggestion (at least ${MIN_EXAMPLES}, with some of each).` }));
   } else {
@@ -633,6 +635,27 @@ function renderSettings(message) {
     say(`${r.scorer} answered in ${r.ms} ms. A ransomware story scored ${fmt(a)} for “school cybersecurity”; a football story scored ${fmt(b)}.`);
   };
 
+  const textBox = h('input', { type: 'checkbox' });
+  const includeText = h('label', { class: 'check' }, textBox, ' Include page text and address (for pages you are happy to share)');
+  const debugStatus = h('div', { class: 'status', role: 'status' });
+  const debugReport = async (how) => {
+    const [pageReport, worker] = await Promise.all([pageAction('debug', { text: textBox.checked }), send('debug-info')]);
+    if (!pageReport) {
+      debugStatus.replaceChildren(h('div', { class: 'error', text: 'The zapper is not running on this tab.' }));
+      return;
+    }
+    const json = JSON.stringify({ ...pageReport, worker }, null, 2);
+    if (how === 'copy') {
+      await navigator.clipboard.writeText(json);
+      debugStatus.replaceChildren(h('div', { class: 'ok', text: `Copied (${pageReport.blocks.length} blocks).` }));
+    } else {
+      const a = h('a', { href: URL.createObjectURL(new Blob([json], { type: 'application/json' })), download: `lenszap-debug-${pageReport.host}-${pageReport.generated.slice(0, 10)}.json` });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      debugStatus.replaceChildren(h('div', { class: 'ok', text: 'Saved.' }));
+    }
+  };
+
   setBody(
     message ? h('div', { class: 'ok', role: 'status', text: message }) : null,
     h('h3', { text: 'Everywhere' }),
@@ -658,6 +681,17 @@ function renderSettings(message) {
       h('dt', { text: 'Lens' }), h('dd', { text: `${state.lens.metadata.name} v${state.lens.metadata.lensVersion}` }),
       page.rule ? h('dt', { text: 'Site rule' }) : null, page.rule ? h('dd', { text: `${page.rule}: one block per item` }) : null) : null,
 
+    h('h3', { text: 'What to hide' }),
+    (() => {
+      const box = h('input', { type: 'checkbox' });
+      box.checked = st.hideUnmatched === true;
+      box.addEventListener('change', async () => { state.settings = (await send('set-settings', { patch: { hideUnmatched: box.checked } })).settings; renderSettings(); });
+      return h('label', { class: 'check' }, box, ' Also hide blocks that match none of my interests');
+    })(),
+    h('p', { class: 'note', text: st.hideUnmatched === true
+      ? 'Anything not about an interest you weighted up is hidden, along with anything you weighted down.'
+      : 'Only blocks matching an interest you weighted down (less of this) are hidden. Everything else stays.' }),
+
     h('h3', { text: 'Display' }),
     toggle('hoverInfo', 'Show the score when I hover over a block'),
     toggle('animate', 'Animate scoring and zapping'),
@@ -676,6 +710,14 @@ function renderSettings(message) {
         h('button', { text: 'Save', on: { click: async () => { if (await saveModel()) say('Saved.'); } } }),
         h('button', { class: 'primary', text: 'Test connection', on: { click: test } })),
       status) : null,
+
+    h('h3', { text: 'Troubleshooting' }),
+    h('p', { class: 'note', text: 'A report of this page: settings, model timings and errors, and every block’s scores and reasoning. Nothing is sent anywhere; copy it or save it and share it yourself.' }),
+    includeText,
+    h('div', { class: 'actions' },
+      h('button', { text: 'Copy debug report', disabled: !page, on: { click: () => debugReport('copy') } }),
+      h('button', { text: 'Save as file', disabled: !page, on: { click: () => debugReport('save') } })),
+    debugStatus,
 
     h('h3', { text: 'Kept on this device only' }),
     h('p', { class: 'note', text: 'Unsaved slider positions, per-site settings, and training marks. None of it is written into your lens or exported.' }),
