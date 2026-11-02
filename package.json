@@ -7,6 +7,8 @@
   "license": "Apache-2.0",
   "scripts": {
     "test": "node test/run-tests.mjs",
+    "test:watch": "node --watch-path=core --watch-path=test --watch-path=eval test/run-tests.mjs",
+    "dev": "node scripts/dev.mjs",
     "bench": "node bench/bench.mjs",
     "browser-check": "node test/browser-check.mjs",
     "check-upstream": "node scripts/check-upstream.mjs",

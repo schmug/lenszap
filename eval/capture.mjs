@@ -12,13 +12,16 @@
 //   node eval/capture.mjs --list eval/sites.txt
 //   node eval/capture.mjs --file demo/fixture.html --as https://fixture.example/ --data eval/demo
 //   node eval/capture.mjs --resplit            # re-split saved snapshots with the current splitter
+//   node eval/capture.mjs --resplit --site verge   # only snapshots whose name contains "verge"
 //
 // Each capture also saves the page's HTML (scripts removed) to
 // <data>/snapshots/<slug>.html. --resplit loads those snapshots instead of the
 // live sites, so a splitter change can be measured on the same pages: blocks
 // whose text is unchanged keep their labels, a block cut out of one labelled
 // block inherits its label (unless that block was labelled mixed), and the rest
-// are left for `npm run label`.
+// are left for `npm run label`. A resplit is offline: every request other than
+// the snapshot itself and this machine (images, fonts, styles the snapshot links
+// to) is refused, so it never reaches the web.
 //
 // Options: --data DIR (default eval/data, which git ignores)  --wait MS (default 3000)
 //          --headed (show the browser; some sites block headless ones)  --shots
@@ -69,10 +72,15 @@ if (args.resplit) {
     console.error(`No snapshots in ${dir}. Capture pages first (this version saves them).`);
     process.exit(2);
   }
-  for (const f of readdirSync(dir).filter((f) => f.endsWith('.html'))) {
+  const site = typeof args.site === 'string' ? args.site.toLowerCase() : null;
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.html') && (!site || f.toLowerCase().includes(site)))) {
     const html = readFileSync(join(dir, f), 'utf8');
     const url = html.match(/<base href="([^"]+)"/)?.[1];
     if (url) { snapshots.set(url, html); targets.push(url); }
+  }
+  if (snapshots.size === 0) {
+    console.error(`No snapshot${site ? ` with "${args.site}" in its name` : ''} in ${dir}.`);
+    process.exit(2);
   }
 }
 if (args.file) {
@@ -105,6 +113,14 @@ if (!context.serviceWorkers().length) await context.waitForEvent('serviceworker'
 if (args.file) {
   const body = readFileSync(args.file);
   await context.route(args.as, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body }));
+}
+if (args.resplit) {
+  // Offline: registered first, so the snapshot routes below take precedence.
+  await context.route('**/*', (route) => {
+    const u = new URL(route.request().url());
+    const local = !/^https?:$/.test(u.protocol) || ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+    return local ? route.continue() : route.abort('blockedbyclient');
+  });
 }
 for (const [url, body] of snapshots) {
   await context.route(url, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body }));
