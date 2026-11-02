@@ -303,8 +303,30 @@ await tab('Settings');
 assert.ok(await panel.isVisible('text=Show the score when I hover over a block'));
 if (shots) await panel.screenshot({ path: join(shots, 'panel-settings.jpg'), quality: 85 });
 
+// The panel follows the system's light or dark setting, form controls included.
+const panelColors = () =>
+  panel.evaluate(() => {
+    const css = (el, prop) => getComputedStyle(el)[prop];
+    const probe = document.body.appendChild(document.createElement('input')); // native control, unstyled by the panel
+    const out = { bg: css(document.body, 'backgroundColor'), fg: css(document.body, 'color'), input: css(probe, 'backgroundColor') };
+    probe.remove();
+    return out;
+  });
+const light = await panelColors();
+await panel.emulateMedia({ colorScheme: 'dark' });
+const dark = await panelColors();
+const lum = (rgb) => rgb.match(/\d+/g).slice(0, 3).reduce((a, n) => a + Number(n), 0) / 3;
+assert.ok(lum(light.bg) > 200 && lum(light.fg) < 60, `light panel is dark on light (${light.bg}, ${light.fg})`);
+assert.ok(lum(dark.bg) < 60 && lum(dark.fg) > 200, `dark panel is light on dark (${dark.bg}, ${dark.fg})`);
+assert.ok(lum(dark.input) < 90, `dark panel form controls are dark too (${dark.input})`);
+if (shots) await panel.screenshot({ path: join(shots, 'panel-settings-dark.jpg'), quality: 85 });
+await tab('Ledger');
+if (shots) await panel.screenshot({ path: join(shots, 'panel-ledger-dark.jpg'), quality: 85 });
+await panel.emulateMedia({ colorScheme: 'light' });
+await tab('Settings');
+
 // Pause: blocks are still scored and decided, but nothing on the page changes.
-await panel.click('button:text-is("Pause on this site")');
+await panel.click('#body button:text-is("Pause on this site")');
 await page.waitForFunction(() => !document.querySelector('[data-lpz-zapped], [data-lpz-zapping]'), null, { timeout: 5000 });
 assert.equal(await page.isVisible('text=mild weekend'), true, 'paused: nothing hidden');
 await panel.waitForSelector('#count:has-text("would be hidden")');
@@ -314,7 +336,24 @@ await page.hover('p:has-text("student information system is back online")');
 await page.waitForTimeout(400);
 assert.equal(await tipHtml(), null, 'paused: no hover popover');
 await page.mouse.move(5, 5);
-await panel.click('button:text-is("Resume on this site")');
+assert.match(await panel.textContent('#paused'), /Paused on this site/, 'the panel says the site is paused');
+// Resume from the header banner.
+await panel.click('#paused button:text-is("Resume on this site")');
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]').length > 0, null, { timeout: 5000 });
+await settle();
+assert.equal(await panel.isHidden('#paused'), true, 'no pause banner once resumed');
+
+// Pause everywhere: the same, on every site, and independent of the site's own pause.
+await panel.click('#body button:text-is("Pause everywhere")');
+await page.waitForFunction(() => !document.querySelector('[data-lpz-zapped], [data-lpz-zapping]'), null, { timeout: 5000 });
+await panel.waitForSelector('#count:has-text("Paused everywhere")');
+assert.match(await panel.textContent('#paused'), /Paused everywhere/, 'the banner says paused everywhere');
+await panel.click('#body button:text-is("Pause on this site")');
+await panel.waitForSelector('#paused:has-text("Paused everywhere and on this site")');
+await panel.click('#paused button:text-is("Resume everywhere")');
+await panel.waitForSelector('#count:has-text("Paused on this site")');
+assert.equal(await page.isVisible('text=mild weekend'), true, 'the site pause outlives the browser-wide one');
+await panel.click('#body button:text-is("Resume on this site")');
 await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]').length > 0, null, { timeout: 5000 });
 await settle();
 
