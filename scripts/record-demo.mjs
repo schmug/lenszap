@@ -194,12 +194,17 @@ async function glide(p, selector) {
 }
 async function click(p, selector) { await glide(p, selector); await pause(250); await p.click(selector); }
 async function settle(timeout = 150000) {
+  // Scoring starts a moment after load and arrives in waves, so "idle" right
+  // after a navigation means nothing. Wait for scoring to have begun (or a
+  // grace period to pass), then for several idle checks in a row.
   const start = Date.now();
   await page.waitForSelector('[data-lpz-id]', { state: 'attached', timeout: 30000 }).catch(() => {});
+  let began = false, idle = 0;
   while (Date.now() - start < timeout) {
     const busy = await page.evaluate(() => !!document.querySelector('[data-lpz-zapping]')).catch(() => true);
     const scoring = await panel.evaluate(() => !document.getElementById('progress').hidden).catch(() => false);
-    if (!busy && !scoring) return true;
+    if (busy || scoring) { began = true; idle = 0; } else idle++;
+    if ((began || Date.now() - start > 8000) && idle >= 6) return true;
     await pause(500);
   }
   console.log('  (still scoring; moving on)');
