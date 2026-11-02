@@ -178,7 +178,11 @@
         if (child.matches(STRUCTURAL)) continue;
         const text = norm(child.textContent);
         if (text.length < MIN_HEADLINE_CHARS) continue;
-        if (child.getClientRects().length === 0) continue; // not rendered
+        if (child.getClientRects().length === 0) {
+          // A display:contents wrapper has no box of its own but shows its children.
+          if (getComputedStyle(child).display === 'contents') walk(child, inStories);
+          continue; // otherwise not rendered
+        }
         // Too long to be one block: walk in without measuring (measuring every
         // level of a big page is slow, and the answer is always 'split').
         if (!LEAFY.has(child.tagName) && text.length > MAX_CONTAINER_CHARS) {
