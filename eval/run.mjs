@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { scoreLexical, LEXICAL_SCORER_ID } from '../core/lexical-scorer.js';
 import { decide } from '../core/decide.js';
+import { adSlotScore } from '../core/segment.js';
 import { scoreWithEndpoint, modelScorerId, isLoopbackEndpoint } from '../core/model-scorer.js';
 import { loadDataset, parseArgs, readLens } from './lib.mjs';
 import { compare, total, rates } from './metrics.mjs';
@@ -79,7 +80,10 @@ async function scoreAll(scorer) {
   const t0 = performance.now();
   for (const { slug, page, labels } of dataset) {
     // Only labelled blocks are scored: unlabelled ones cannot be judged.
-    const blocks = page.blocks.filter((b) => labels[b.key] && labels[b.key] !== 'skip').map((b) => ({ id: b.key, text: b.text }));
+    const labelled = page.blocks.filter((b) => labels[b.key] && labels[b.key] !== 'skip');
+    // Ad slots are judged by structure, as in the extension, not sent to the scorer.
+    const slots = labelled.filter((b) => b.adSlot).map((b) => adSlotScore(b.key, priorities));
+    const blocks = labelled.filter((b) => !b.adSlot).map((b) => ({ id: b.key, text: b.text }));
     const onTiming = (_id, ms) => {
       timings.push(ms);
       progress(scorer);
@@ -87,7 +91,7 @@ async function scoreAll(scorer) {
     let scores;
     if (scorer === 'lexical') scores = scoreLexical(blocks, topics);
     else scores = await scoreWithEndpoint(settings, blocks, topics, fetch, { concurrency, onTiming });
-    perPage.push({ slug, labels, scores });
+    perPage.push({ slug, labels, scores: [...scores, ...slots] });
   }
   return { perPage, wallMs: performance.now() - t0, timings };
 }

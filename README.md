@@ -11,6 +11,7 @@ On every page the zapper splits the content into blocks, judges how well each bl
 ## What it does
 
 - **Zaps off-lens blocks.** Each block gets an "off-lens" confidence. A block is hidden when that confidence reaches your threshold. Interests you weight positively keep blocks; interests you weight negatively zap them.
+- **Zaps display ads, if you ask.** Image and iframe ads have no text to score, so the zapper finds ad slots by structure: an "Advertisement" or "Sponsored" label, an ad marker in the element's id or class, or an iframe from an ad network, around almost no text. An ad slot is hidden only when your lens has a "less of this" interest about ads (for example `advertisements` with a negative weight). Otherwise it is left alone.
 - **Side panel.** The controls live in Chrome's side panel: click the toolbar button to open it. Chrome docks it beside the page and the page reflows to fit, like any browser sidebar. It follows whichever tab you're on, with five tabs: **Ledger**, **Interests**, **Train**, **Lens**, and **Settings**. With the panel closed, the toolbar badge still shows how many blocks are hidden on the page.
 - **Ledger.** The panel lists every hidden block, with its off-lens score, with the reason it was hidden and a **Show** button. After every pass the zapper checks that the blocks hidden on the page are exactly the ones in the ledger. If they ever differ, it restores everything and says so.
 - **Before / After.** **Before** shows the page as published, with zapped blocks outlined in red.
