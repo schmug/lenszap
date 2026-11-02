@@ -14,6 +14,7 @@
 import { isLoopbackEndpoint } from '../core/model-scorer.js';
 import { suggest, MIN_EXAMPLES } from '../core/train.js';
 import { lensChanges, validateLens, bumpVersion, withToolFields } from '../core/lens-edit.js';
+import { pauseScope, pauseLabel } from '../core/pause.js';
 
 const $ = (id) => document.getElementById(id);
 const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
@@ -48,6 +49,19 @@ const body = $('body');
 const setBody = (...parts) => body.replaceChildren(...parts.flat().filter((p) => p != null && p !== false));
 
 const threshold = () => page?.threshold ?? state.site.threshold ?? state.settings.threshold;
+// Read from stored state, not the page snapshot, so a click shows at once and
+// a browser-wide pause shows even on pages the zapper cannot run on.
+const pausedBy = () => pauseScope(state?.settings, state?.site);
+const setPausedEverywhere = async (on) => {
+  state.settings = (await send('set-settings', { patch: { paused: on } })).settings;
+  renderAll();
+};
+const setPausedHere = async (on) => {
+  if (!page?.host) return;
+  state.site = (await send('set-site', { host: page.host, patch: { paused: on ? true : null } })).site;
+  renderAll();
+};
+
 const priorities = () =>
   (state.lens.interpretation.priorities ?? []).map((p) => ({
     topic: p.topic,
@@ -105,7 +119,7 @@ function renderHeader() {
   count.replaceChildren();
   if (!page) count.textContent = 'Not running on this page';
   else if (page.paused) {
-    count.textContent = `Paused · ${page.wouldZap.length} would be hidden`;
+    count.textContent = `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')} · ${page.wouldZap.length} would be hidden`;
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
     if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
   }
@@ -113,6 +127,18 @@ function renderHeader() {
     count.append(h('strong', { text: String(page.zapped.length) }), ` hidden of ${page.blocks}`);
     if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
     if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
+  }
+  const scope = pausedBy();
+  const banner = $('paused');
+  banner.hidden = !scope;
+  banner.replaceChildren();
+  if (scope) {
+    banner.append(
+      h('strong', { text: pauseLabel(scope) }),
+      scope === 'site' ? '. Zapping still runs on other sites. ' : '. Nothing is hidden on any site until you resume. ',
+      h('div', { class: 'actions' },
+        scope !== 'site' ? h('button', { text: 'Resume everywhere', on: { click: () => setPausedEverywhere(false) } }) : null,
+        scope !== 'everywhere' ? h('button', { text: 'Resume on this site', on: { click: () => setPausedHere(false) } }) : null));
   }
   const bar = $('progress');
   bar.hidden = !page?.progress.total;
@@ -186,7 +212,7 @@ function renderLedger(force = false) {
   parts.push(h('p', { class: 'note' },
     page.zapped.length
       ? 'Every hidden block is listed here. Show puts it back on this page. Hover any block on the page for its score.'
-      : page.paused ? `Paused on this site: nothing is hidden and nothing is drawn on the page. Blocks are still scored, so resuming is instant. ${page.wouldZap.length} block${page.wouldZap.length === 1 ? '' : 's'} would be hidden.` : page.progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
+      : page.paused ? `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')}: nothing is hidden and nothing is drawn on the page. Blocks are still scored, so resuming is instant. ${page.wouldZap.length} block${page.wouldZap.length === 1 ? '' : 's'} would be hidden.` : page.progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
   if (page.zapped.length) parts.push(h('div', { class: 'actions' }, h('button', { text: 'Restore all', on: { click: act('restore-all') } })));
   const entry = (d, button) =>
     h('li', { class: 'entry' },
@@ -549,6 +575,7 @@ function renderSettings(message) {
   const host = page?.host ?? '';
   const st = state.settings;
   const paused = state.site.paused === true;
+  const pausedAll = state.settings.paused === true;
 
   const toggle = (key, label) => {
     const box = h('input', { type: 'checkbox' });
@@ -631,13 +658,23 @@ function renderSettings(message) {
 
   setBody(
     message ? h('div', { class: 'ok', role: 'status', text: message }) : null,
+    h('h3', { text: 'Everywhere' }),
+    h('div', { class: 'actions' }, h('button', {
+      'aria-pressed': String(pausedAll),
+      text: pausedAll ? 'Resume everywhere' : 'Pause everywhere',
+      on: { click: () => setPausedEverywhere(!pausedAll) }
+    })),
+    h('p', { class: 'note', text: pausedAll
+      ? 'Paused in every tab: nothing is hidden on any site. Per-site pauses are kept and still apply after you resume.'
+      : 'Stops zapping on every site at once. Blocks are still scored, so resuming is instant.' }),
     h('h3', { text: host ? `This site: ${host}` : 'This site' }),
     h('div', { class: 'actions' }, h('button', {
       'aria-pressed': String(paused),
       disabled: !host,
       text: paused ? 'Resume on this site' : 'Pause on this site',
-      on: { click: async () => { state.site = (await send('set-site', { host, patch: { paused: paused ? null : true } })).site; renderSettings(); } }
+      on: { click: () => setPausedHere(!paused) }
     })),
+    pausedAll && !paused && host ? h('p', { class: 'note', text: 'This site is paused by the browser-wide pause. Pause it here too to keep it paused after you resume everywhere.' }) : null,
     page ? h('dl', { class: 'kv' },
       h('dt', { text: 'Scorer' }), h('dd', { text: page.scorer }),
       h('dt', { text: 'Threshold' }), h('dd', { text: `${pct(threshold())}${state.site.threshold !== undefined ? ' (this site)' : ''}` }),
