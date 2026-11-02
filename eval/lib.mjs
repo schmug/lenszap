@@ -97,11 +97,14 @@ export function readLens(path) {
  * Carry labels from an earlier capture of a page to a new split of the same
  * page. A block whose text is unchanged keeps its label (same key). A new
  * block whose text lies inside one old labelled block inherits that label,
- * unless the old block was labelled mixed (its parts need their own labels).
+ * unless the old block was labelled mixed (its parts need their own labels)
+ * or the new block is under INHERIT_MIN_SHARE of it (a fragment may be chrome).
  * Everything else is left for you to label.
  *
  * @returns {{labels: Record<string,string>, kept: number, inherited: number, unlabelled: number}}
  */
+export const INHERIT_MIN_SHARE = 0.4;
+
 export function carryLabels(oldBlocks, oldLabels, newBlocks) {
   const labelled = oldBlocks
     .filter((b) => oldLabels[b.key] && oldLabels[b.key] !== 'mixed')
@@ -111,7 +114,9 @@ export function carryLabels(oldBlocks, oldLabels, newBlocks) {
   for (const b of newBlocks) {
     if (oldLabels[b.key]) { labels[b.key] = oldLabels[b.key]; kept++; continue; }
     const t = norm(b.text);
-    const from = t && labelled.filter((o) => o.text.includes(t));
+    // A small fragment (a byline, a comment count) does not inherit: it may be
+    // chrome, and only a label says so.
+    const from = t && labelled.filter((o) => o.text.includes(t) && t.length >= INHERIT_MIN_SHARE * o.text.length);
     const kinds = new Set((from || []).map((o) => o.label));
     if (kinds.size === 1) { labels[b.key] = [...kinds][0]; inherited++; } else unlabelled++;
   }

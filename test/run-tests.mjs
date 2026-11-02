@@ -465,12 +465,13 @@ await test('carryLabels: unchanged keys keep labels, parts of one labelled block
   const para = mk('A paragraph that does not change at all between splits.');
   const old = [repo, multi, para];
   const labels = { [repo.key]: 'keep', [multi.key]: 'mixed', [para.key]: 'zap' };
-  const next = [mk('A tool for things.'), mk('Story one about schools.'), para];
+  const next = [mk('owner / tool A tool for things.'), mk('Story one about schools.'), para, mk('120 stars today')];
   const c = carryLabels(old, labels, next);
   assert.equal(c.labels[para.key], 'zap');
   assert.equal(c.labels[next[0].key], 'keep');
   assert.equal(c.labels[next[1].key], undefined);
-  assert.deepEqual([c.kept, c.inherited, c.unlabelled], [1, 1, 1]);
+  assert.equal(c.labels[next[3].key], undefined, 'a small fragment does not inherit');
+  assert.deepEqual([c.kept, c.inherited, c.unlabelled], [1, 1, 2]);
 });
 
 await test('scoringOrder: on screen top to bottom, then below nearest first, then above', () => {

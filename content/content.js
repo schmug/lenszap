@@ -112,7 +112,8 @@
       const t = at.length;
       linkChars += t;
       linkLetters += letterCount(at);
-      if (t >= STORY_LINK_CHARS) storyHrefs.add(a.getAttribute('href'));
+      // "/story" and "/story#comments" are one story.
+      if (t >= STORY_LINK_CHARS) storyHrefs.add(String(a.getAttribute('href') ?? '').replace(/#.*$/, '').replace(/\/$/, ''));
     }
     let several = 0;
     for (const c of el.children) if (norm(c.textContent).length >= MIN_CHARS) several++;
