@@ -7,7 +7,7 @@
 <title>LensZap labeller</title>
 <style>
   :root { --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc; --sel: #3a5bd9;
-    --keep: #2e9b57; --zap: #d63b3b; --ad: #b86e00; --evidence: #2c6fb5; --chrome: #777; --mixed: #8a4fbf; --skip: #aaa; }
+    --keep: #2e9b57; --zap: #d63b3b; --ad: #b86e00; --evidence: #2c6fb5; --chrome: #777; --mixed: #8a4fbf; --neutral: #5f8f8f; --skip: #aaa; }
   @media (prefers-color-scheme: dark) { :root { --bg: #18181a; --fg: #ececea; --muted: #9a9a95; --line: #2e2e31; } }
   * { box-sizing: border-box; }
   body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
@@ -38,7 +38,7 @@
 </aside>
 <main>
   <div class="help">Label each block against your lens. <kbd>↑</kbd><kbd>↓</kbd> or <kbd>j</kbd><kbd>k</kbd> move ·
-    <kbd>1</kbd> keep · <kbd>2</kbd> zap · <kbd>3</kbd> ad · <kbd>4</kbd> evidence · <kbd>5</kbd> chrome (shouldn't be a block) ·
+    <kbd>1</kbd> keep (on an interest) · <kbd>2</kbd> zap (a "less of this" interest) · <kbd>7</kbd> neutral (none of your interests) · <kbd>3</kbd> ad · <kbd>4</kbd> evidence · <kbd>5</kbd> chrome (shouldn't be a block) ·
     <kbd>6</kbd> mixed (should be split) · <kbd>0</kbd> skip · <kbd>Backspace</kbd> clear. Labels save as you go.
     <br>Showing <select id="sample"><option value="15">a random 15 blocks</option><option value="30">a random 30 blocks</option><option value="0">every block</option></select> per page.
     A random sample measures the zapper just as fairly; label more pages rather than more of one page.</div>
@@ -46,7 +46,7 @@
 </main>
 <div id="status"></div>
 <script>
-const KEYS = { 1: 'keep', 2: 'zap', 3: 'ad', 4: 'evidence', 5: 'chrome', 6: 'mixed', 0: 'skip' };
+const KEYS = { 1: 'keep', 2: 'zap', 3: 'ad', 4: 'evidence', 5: 'chrome', 6: 'mixed', 7: 'neutral', 0: 'skip' };
 let meta = null, slug = null, page = null, all = [], labels = {}, cur = 0, saveTimer = null;
 let sampleSize = 15;
 try { sampleSize = Number(localStorage.getItem('lpz-sample') ?? 15); } catch {}

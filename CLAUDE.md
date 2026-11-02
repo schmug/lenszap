@@ -37,6 +37,12 @@ No build step and no runtime dependencies: load the directory unpacked.
   pass; on a mismatch everything is restored.
 - **Never zapped:** page chrome and controls, corrections and primary sources,
   and any block the scorer returned nothing for.
+- **Unmatched blocks** (matching none of the positive interests) are kept by
+  default; `settings.hideUnmatched` (Settings → "Also hide blocks that match
+  none of my interests") hides them too. `decide()` and `offLensConfidence()`
+  default to hiding, for callers that don't pass the setting; the extension
+  always passes it. Eval labels: `zap` = matches a "less of this" interest,
+  `neutral` = matches none; `npm run eval -- --hide-unmatched` for the other mode.
 - **Ad slots** (core/segment.js `adSlotScore`) are judged by structure, not
   text, and are zapped only when the lens has a negative interest about ads;
   otherwise they are unscored and never zapped.

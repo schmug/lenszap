@@ -17,6 +17,9 @@
 //          --model NAME  --concurrency N  --at THRESHOLD (detail rows; default 0.8 for
 //          word-only and 0.65 for a model, the extension's defaults)
 //          --zap-ads (add a "less of this" priority for ads, as a reader setting would)
+//          --hide-unmatched (also hide blocks that match none of the interests; the
+//          extension's default keeps them). Blocks labelled neutral count as should-go
+//          with it and should-stay without it; a zap label always means should-go.
 //          --show (list every mistake with its text)  --json  --save (write results to DATA/results/)
 //
 // Model requests go only to the loopback endpoint you name.
@@ -45,6 +48,7 @@ const concurrency = Number(args.concurrency ?? 4);
 const atFor = (scorerId) => Number(args.at ?? (scorerId === LEXICAL_SCORER_ID ? 0.8 : 0.65));
 const THRESHOLDS = [...new Set([0.5, 0.6, 0.65, 0.7, 0.8, 0.9, ...(args.at ? [Number(args.at)] : [])])].sort();
 const AD_TOPIC = 'advertising or sponsored content';
+const hideUnmatched = !!args['hide-unmatched'];
 
 const lens = readLens(args.lens ?? join(root, 'lenses/sample-lens.json'));
 const priorities = lens.interpretation.priorities.map(({ topic, weight }) => ({ topic, weight }));
@@ -99,8 +103,8 @@ async function scoreAll(scorer) {
 function evaluate({ perPage }, scorerId) {
   return THRESHOLDS.map((threshold) => {
     const pages = perPage.map(({ slug, labels, scores }) => {
-      const d = decide({ scores, priorities, threshold, scorer: scorerId });
-      return { slug, ...compare(d.map((x) => ({ key: x.id, zap: x.zap })), labels) };
+      const d = decide({ scores, priorities, threshold, scorer: scorerId, hideUnmatched });
+      return { slug, ...compare(d.map((x) => ({ key: x.id, zap: x.zap })), labels, { hideUnmatched }) };
     });
     const t = total(pages.map(({ slug, ...c }) => c));
     return { threshold, totals: t, rates: rates(t), pages };
@@ -137,7 +141,7 @@ if (api !== 'lexical') {
   }
 }
 
-const result = { data: dataDir, lens: lens.id, zapAds: !!args['zap-ads'], pages: dataset.length, date: new Date().toISOString().slice(0, 10), runs };
+const result = { data: dataDir, lens: lens.id, zapAds: !!args['zap-ads'], hideUnmatched, pages: dataset.length, date: new Date().toISOString().slice(0, 10), runs };
 
 if (args.save) {
   mkdirSync(join(dataDir, 'results'), { recursive: true });
@@ -153,7 +157,8 @@ if (args.json) {
 
 const p = (x) => (x == null ? '  —' : `${String(Math.round(x * 100)).padStart(3)}%`);
 const first = runs[0].rows[0].totals;
-console.log(`${dataset.length} pages, ${first.labelled} labelled blocks: ${first.keep} keep, ${first.zap} zap, ${first.ad} ad, ${first.evidence} evidence, ${first.chrome} chrome, ${first.mixed} mixed.`);
+console.log(`Blocks matching none of your interests: ${hideUnmatched ? 'hidden (--hide-unmatched)' : 'kept (the default)'}.`);
+console.log(`${dataset.length} pages, ${first.labelled} labelled blocks: ${first.keep} keep, ${first.zap} zap, ${first.neutral} neutral, ${first.ad} ad, ${first.evidence} evidence, ${first.chrome} chrome, ${first.mixed} mixed.`);
 console.log(`Bad splits (chrome + mixed): ${p(rates(first).splitProblemRate)} of labelled blocks.\n`);
 for (const run of runs) {
   console.log(`Scorer: ${run.scorer}`);

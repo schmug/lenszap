@@ -12,10 +12,12 @@ import { SHOULD_HIDE, SHOULD_KEEP, SPLIT_PROBLEM } from './lib.mjs';
  * @param {Record<string, string>} labels - block key → label
  * @returns counts, plus the keys of every mistake so a report can show them
  */
-export function compare(decisions, labels) {
+export function compare(decisions, labels, { hideUnmatched = true } = {}) {
   const c = {
     labelled: 0,
-    keep: 0, zap: 0, ad: 0, evidence: 0, chrome: 0, mixed: 0,
+    keep: 0, zap: 0, neutral: 0, ad: 0, evidence: 0, chrome: 0, mixed: 0,
+    // neutral blocks counted as should-go (hideUnmatched) or as should-stay
+    neutralShouldGo: 0, neutralShouldStay: 0,
     keptHidden: [], // labelled keep, but hidden: the worst mistake for a reader
     evidenceHidden: [], // must always be empty
     zapMissed: [], // labelled zap, left visible
@@ -28,6 +30,12 @@ export function compare(decisions, labels) {
     c.labelled++;
     if (l in c && typeof c[l] === 'number') c[l]++;
     if (SPLIT_PROBLEM.has(l)) continue;
+    if (l === 'neutral') {
+      // A block matching none of the interests: should go only if unmatched blocks are hidden.
+      if (hideUnmatched) { c.neutralShouldGo++; if (zap) c.hiddenCorrect++; else c.zapMissed.push(key); }
+      else { c.neutralShouldStay++; if (zap) c.keptHidden.push(key); }
+      continue;
+    }
     if (SHOULD_HIDE.has(l)) {
       if (zap) c.hiddenCorrect++;
       else (l === 'ad' ? c.adMissed : c.zapMissed).push(key);
@@ -58,8 +66,8 @@ export function total(results) {
  *  - splitProblemRate: of the labelled blocks, how many the splitter got wrong.
  */
 export function rates(t) {
-  const shouldKeep = t.keep + t.evidence;
-  const shouldHide = t.zap + t.ad;
+  const shouldKeep = t.keep + t.evidence + t.neutralShouldStay;
+  const shouldHide = t.zap + t.ad + t.neutralShouldGo;
   const hiddenLabelled = t.hiddenCorrect + t.keptHidden.length + t.evidenceHidden.length;
   const div = (a, b) => (b > 0 ? a / b : null);
   return {

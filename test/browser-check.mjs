@@ -95,6 +95,20 @@ await page.goto(pageUrl);
 await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
 await settle();
 
+// Out of the box, a block that matches none of your interests stays: only a
+// "less of this" match can zap. The sample lens weights gossip at only -0.5,
+// so at 80% nothing is hidden.
+assert.equal((await worker.evaluate(() => chrome.storage.local.get('settings'))).settings?.hideUnmatched ?? false, false);
+assert.equal(await isZapped('mild weekend'), false, 'default: a block matching no interest is kept');
+assert.equal(await isZapped('spring musical'), false, 'default: a block matching no interest is kept');
+console.log(`default (keep unmatched): ${(await zappedTexts()).length} hidden`);
+// The rest of this check uses the other choice: hide blocks that match none of your interests.
+await worker.evaluate(() => chrome.storage.local.get('settings').then(({ settings }) =>
+  chrome.storage.local.set({ settings: { ...(settings ?? {}), hideUnmatched: true } })));
+await page.reload();
+await page.waitForSelector('[data-lpz-id]', { state: 'attached' });
+await settle();
+
 // The side panel: Chrome docks it and reflows the page. Headless Chromium
 // cannot show a side panel, so the check opens the same page in a tab, pinned
 // to the fixture's tab. Nothing is drawn into the page's own layout.
@@ -426,6 +440,7 @@ for (const api of ['systemone', 'openai', 'ollama']) {
   await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
     threshold: 0.8,
     scorer: 'model',
+    hideUnmatched: true,
     model: { api, endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 }
   });
   modelCalls = 0;
@@ -478,7 +493,7 @@ const longPage = '<!doctype html><meta charset="utf-8"><title>Long page (fiction
   '</body>';
 await context.route('https://long.example/**', (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: longPage }));
 await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
-  threshold: 0.8, scorer: 'model', model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 }
+  threshold: 0.8, scorer: 'model', hideUnmatched: true, model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 }
 });
 modelCalls = 0;
 await page.goto('https://long.example/');

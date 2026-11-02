@@ -16,7 +16,8 @@ import { join } from 'node:path';
 /** Labels a block can have. `keep` and `zap` are judged against the lens. */
 export const LABELS = Object.freeze({
   keep: 'On your lens: should stay visible.',
-  zap: 'Off your lens: should be hidden.',
+  zap: 'Matches an interest you weighted down ("less of this"): should be hidden.',
+  neutral: 'Matches none of your interests: hidden only with "also hide blocks that match none of my interests".',
   ad: 'An ad or sponsored block: should be hidden.',
   evidence: 'A correction or primary source: must never be hidden.',
   chrome: 'Page chrome or controls the splitter should not have made a block.',
@@ -24,9 +25,9 @@ export const LABELS = Object.freeze({
   skip: 'Not counted.'
 });
 
-/** Labels that mean "this block should be hidden". */
+/** Labels that mean "this block should be hidden" (plus neutral, when unmatched blocks are hidden). */
 export const SHOULD_HIDE = new Set(['zap', 'ad']);
-/** Labels that mean "this block should be visible". */
+/** Labels that mean "this block should be visible" (plus neutral, when unmatched blocks are kept). */
 export const SHOULD_KEEP = new Set(['keep', 'evidence']);
 /** Labels that report a splitting problem rather than a scoring one. */
 export const SPLIT_PROBLEM = new Set(['chrome', 'mixed']);

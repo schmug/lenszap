@@ -474,6 +474,28 @@ await test('carryLabels: unchanged keys keep labels, parts of one labelled block
   assert.deepEqual([c.kept, c.inherited, c.unlabelled], [1, 1, 2]);
 });
 
+await test('hideUnmatched: off by choice, only a "less of this" match zaps', () => {
+  const pr = [{ topic: 'cybersecurity', weight: 1 }, { topic: 'trump', weight: -0.95 }];
+  const neutral = { id: 'n', matches: { cybersecurity: 0, trump: 0 } };
+  const against = { id: 'a', matches: { cybersecurity: 0, trump: 0.9 } };
+  const on = { id: 'o', matches: { cybersecurity: 0.9, trump: 0 } };
+  const run = (hideUnmatched) => Object.fromEntries(decide({ scores: [neutral, against, on], priorities: pr, threshold: 0.65, scorer: 'x', hideUnmatched }).map((d) => [d.id, d.zap]));
+  assert.deepEqual(run(true), { n: true, a: true, o: false });
+  assert.deepEqual(run(false), { n: false, a: true, o: false });
+  assert.deepEqual(Object.fromEntries(decide({ scores: [neutral], priorities: pr, threshold: 0.65, scorer: 'x' }).map((d) => [d.id, d.zap])), { n: true }, 'decide() alone keeps the original default');
+  assert.equal(offLensConfidence(neutral.matches, pr, { hideUnmatched: false }).offLens, 0);
+});
+
+await test('eval: neutral labels count as should-go only with hideUnmatched', async () => {
+  const { compare, rates } = await import('../eval/metrics.mjs');
+  const labels = { a: 'neutral', b: 'zap', c: 'keep' };
+  const decisions = [{ key: 'a', zap: true }, { key: 'b', zap: true }, { key: 'c', zap: false }];
+  const hide = rates(compare(decisions, labels, { hideUnmatched: true }));
+  assert.deepEqual([hide.wrongZapRate, hide.missRate], [0, 0]);
+  const keep = rates(compare(decisions, labels, { hideUnmatched: false }));
+  assert.equal(keep.wrongZapRate, 0.5, 'a hidden neutral block is a wrong zap when unmatched blocks are kept');
+});
+
 await test('ad slots: markers and hosts, zapped only when the lens has a "less of this" about ads', () => {
   for (const t of ['themonic-ad3', 'sidebar_ad', 'widget ad-slot', 'promoted-post', 'ads']) assert.equal(hasAdMarker(t), true, t);
   for (const t of ['load-more', 'shadow', 'header', 'badge', 'download', 'thread']) assert.equal(hasAdMarker(t), false, t);
