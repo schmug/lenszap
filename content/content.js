@@ -149,11 +149,15 @@
   const hasMedia = (el) => el.matches('img, iframe, picture, video') || !!el.querySelector('img, iframe, picture, video');
   const rendered = (el) => el.getClientRects().length > 0 && el.getBoundingClientRect().width * el.getBoundingClientRect().height >= 1000;
 
-  /** The largest element around `el` that still holds almost no text. */
+  /** The largest element around `el` that still holds almost no text and is not
+   *  much bigger than the ad itself (so a page column holding an ad is not taken). */
   function slotAround(el) {
     let unit = el;
+    const r = el.getBoundingClientRect();
     for (let p = el.parentElement; p && p !== document.body && !p.matches('main, article, [role="main"]'); p = p.parentElement) {
       if (norm(p.textContent).length > AD_SLOT_MAX_CHARS || p.hasAttribute('data-lpz-id')) break;
+      const q = p.getBoundingClientRect();
+      if (q.height > r.height * 1.5 + 60 || q.width > r.width * 1.5 + 60) break;
       unit = p;
     }
     return unit;
@@ -194,6 +198,15 @@
 
   /** Find new blocks; returns their ids. Blocks already registered are kept. */
   function scan() {
+    // An ad slot that has since filled with text (stories loaded into it) is not
+    // an ad slot any more: let the walk split it like anything else.
+    for (const id of adSlots) {
+      const b = blocks.get(id);
+      if (b && norm(b.els.map((e) => e.textContent).join(' ')).length > AD_SLOT_MAX_CHARS) {
+        for (const el of b.els) for (const a of [...el.attributes]) if (a.name.startsWith('data-lpz-')) el.removeAttribute(a.name);
+        blocks.delete(id); scores.delete(id); adSlots.delete(id);
+      }
+    }
     for (const [id, b] of blocks) {
       if (!b.els.some((el) => el.isConnected)) {
         blocks.delete(id);

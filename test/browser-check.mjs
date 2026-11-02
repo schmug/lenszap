@@ -327,6 +327,17 @@ const splitProblems = await page.evaluate(() => {
 });
 assert.deepEqual(splitProblems, [], `splitter fixture:\n${splitProblems.join('\n')}`);
 console.log('splitter fixture: every layout split as marked');
+assert.equal(await page.getAttribute('#rail', 'data-lpz-id'), null, 'a tall column holding an ad is not taken as the ad slot');
+assert.equal(await page.getAttribute('#filling-slot', 'data-lpz-ad'), '', 'an empty labelled slot starts as an ad slot');
+await page.evaluate(() => {
+  const p = document.createElement('p');
+  p.id = 'filled-story';
+  p.textContent = 'Stories loaded into what looked like an ad slot: the library extends its weekend hours through the winter.';
+  document.getElementById('filling-slot').append(p);
+});
+await page.waitForFunction(() => !document.getElementById('filling-slot').hasAttribute('data-lpz-ad') &&
+  !!document.getElementById('filled-story').closest('[data-lpz-id]'), null, { timeout: 5000 });
+console.log('ad slots: a slot that fills with text is split like any other content');
 
 // --- Site rule: table-row stories are one block each -------------------------
 await context.route('https://news.ycombinator.com/**', (route) =>

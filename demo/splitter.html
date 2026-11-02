@@ -84,6 +84,11 @@
   <div class="widget" id="sidebar_ad" data-expect="ad"><div class="a-statement">Advertisement</div><a href="https://other.example/"><img alt="" width="300" height="250" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a></div>
   <div class="widget" id="empty-slot" style="width:300px;height:250px" data-expect="ad"><div class="a-statement">Advertisement</div></div>
   <div id="net-ad" data-expect="ad"><iframe src="https://ad.doubleclick.net/fixture" width="300" height="250" title="3rd party ad content"></iframe></div>
+  <!-- A tall layout column holding one ad: only the ad is a slot, not the column. -->
+  <div id="rail" style="height:1200px"><div id="rail-ad" data-expect="ad"><iframe src="https://ad.doubleclick.net/rail" width="300" height="250"></iframe></div></div>
+  <!-- An ad slot that later fills with stories stops being an ad slot (browser-check fills it). -->
+  <div class="promo-ad2" id="filling-slot"><div class="a-statement">Advertisement</div><img alt="" width="300" height="100" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></div>
+
   <!-- Not ads: a story that mentions advertising, and a "load more" control with "ad" in its class. -->
   <p id="ad-story" data-expect="block">The county's advertising budget for the new transit map was cut in half at Tuesday's meeting, the clerk said.</p>
   <div class="load-more" id="more-link" data-expect="none"><img alt="" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="> More</div>
