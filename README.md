@@ -22,6 +22,7 @@ On every page the zapper splits the content into blocks, judges how well each bl
 - **Edit your lens directly.** The **Lens** tab lists your interests: rename them, change their weights, remove them, or add new ones, and see each change's impact class before you save. **Edit as JSON** opens the whole lens. Either way, saving writes one new version, numbered by the [Adaptation Model's](https://github.com/schmug/lenspub/blob/main/spec/adaptation-model.md#4-impact-classification) rules: a small weight change or a small new interest is minor, while a removal, a rename, or any other field is major. Import, export, and reset are here too.
 - **Train it.** In the **Train** tab, start training, then click blocks on the page and mark each **Keep** or **Zap**. Zapped blocks are shown during training so you can mark the wrong ones, and links don't open. After six marks, the panel suggests a threshold and interest weights that would have decided your marks your way, and shows how many it gets wrong now and after. **Try these** moves your sliders; **Save to lens** in **Interests** keeps them. A block you kept that matches none of your interests can't be fixed by any setting, so the panel tells you to add an interest for it. Each mark stores only that block's scores and your label, never its text or the page it came from.
 - **Site rules.** Some sites lay items out in ways the generic splitter can't find, such as Hacker News, where each story is a set of table rows. A rule in `core/segment.js` makes each story or comment one block there.
+- **Pause everywhere** (Settings) stops zapping on every site at once; it does the same as a site pause, below, in every tab. It is independent of per-site pauses: a site you paused stays paused after you resume everywhere. While anything is paused the panel shows a banner with Resume buttons, and the toolbar badge turns to a grey ‖ whose tooltip says which pause applies.
 - **Pause on this site.** Nothing is hidden and nothing is drawn on the page: no zaps, no scoring spark, no hover popover. Blocks are still scored and decided in the background, so the panel can say how many would be hidden and resuming is instant. **Restore all** works on any page.
 
 ![Before: the page as published, with zapped blocks outlined](screenshots/before.jpg)
@@ -169,6 +170,7 @@ Everything is kept in `chrome.storage.local` on this device and never synced.
 |---|---|---|
 | Your lens | A Lens Manifest, history-free | Only when you press **Export** |
 | Unsaved slider positions | Adaptation State | Never |
+| Browser-wide pause | A setting | Never |
 | Per-site pause and threshold | Adaptation State, keyed by hostname | Never, and never written into the lens |
 | Training marks | Adaptation State: one block's scores and your Keep/Zap label, no text, no address; the last 500 | Never |
 | Model scores | A cache of page text and scores, in memory only | Never; gone when the browser stops the background worker |

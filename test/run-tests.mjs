@@ -43,6 +43,7 @@ import {
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision } from '../core/segment.js';
+import { pauseScope, pauseLabel, badgeFor } from '../core/pause.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -183,6 +184,30 @@ await test('decide: rejects a threshold outside (0, 1]', () => {
 await test('checkLedger: detects unlisted and phantom zaps', () => {
   assert.deepEqual(checkLedger(['a', 'b'], ['b', 'a']), { ok: true, unlisted: [], phantom: [] });
   assert.deepEqual(checkLedger(['a', 'c'], ['a', 'b']), { ok: false, unlisted: ['c'], phantom: ['b'] });
+});
+
+// --- Pause: browser-wide and per site ---------------------------------------
+
+await test('pause: browser-wide and per-site pauses are independent', () => {
+  assert.equal(pauseScope({}, {}), null);
+  assert.equal(pauseScope({ paused: true }, {}), 'everywhere');
+  assert.equal(pauseScope({}, { paused: true }), 'site');
+  assert.equal(pauseScope({ paused: true }, { paused: true }), 'both');
+  assert.equal(pauseScope({ paused: false }, undefined), null);
+  assert.equal(pauseLabel('everywhere'), 'Paused everywhere');
+  assert.equal(pauseLabel(null), '');
+});
+
+await test('pause: the toolbar badge says paused, and why, instead of a count', () => {
+  assert.deepEqual(badgeFor({ zapped: [1, 2, 3] }).text, '3');
+  assert.equal(badgeFor({ zapped: [] }).text, '');
+  const all = badgeFor({ paused: true, pausedBy: 'everywhere', zapped: [] });
+  assert.equal(all.text, '‖');
+  assert.match(all.title, /paused everywhere/);
+  assert.match(badgeFor({ paused: true, pausedBy: 'site', zapped: [] }).title, /paused on this site/);
+  assert.notEqual(all.color, badgeFor({ zapped: [1] }).color, 'paused is not drawn in the zap colour');
+  assert.equal(badgeFor(null, true).text, '‖', 'pages the zapper cannot run on still show a browser-wide pause');
+  assert.equal(badgeFor(null, false).text, '');
 });
 
 // --- Lens editing (Manifest Producer duties) --------------------------------
