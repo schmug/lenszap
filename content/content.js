@@ -168,6 +168,7 @@
     (function walk(el, inStories) {
       let last = null; // the block before this point among el's children
       let captions = []; // captions waiting for the next block
+      let leadIn = null; // a block ending in a colon, waiting for what it introduces
       const attach = (id, els) => {
         const b = blocks.get(id);
         for (const c of els) { c.setAttribute('data-lpz-id', id); b.els.push(c); }
@@ -189,11 +190,19 @@
         if (what === 'block' && child.matches(CAPTION) && !m.headings) {
           if (last) attach(last, [child]);
           else captions.push(child);
+        } else if (what === 'block' && leadIn && LEAFY.has(child.tagName)) {
+          // The quote or list a lead-in sentence introduces joins its block.
+          attach(leadIn, [child]);
+          blocks.get(leadIn).text += ` ${text}`;
+          leadIn = null;
         } else if (what === 'block') {
           last = register([child], text);
           added.push(last);
           if (captions.length) { attach(last, captions); captions = []; }
+          // "…said on Hacker News:" introduces what follows; keep them together.
+          leadIn = child.tagName === 'P' && /:$/.test(text) ? last : null;
         } else if (what === 'split') {
+          leadIn = null;
           walk(child, inStories || m.headings >= 2 || m.storyLinks >= 2);
         }
       }
