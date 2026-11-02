@@ -14,9 +14,9 @@
 // How it is made: headless Chromium cannot dock a side panel, so the panel page
 // is opened in its own tab, pinned to the page's tab, just as test/browser-check
 // does. Both tabs are captured with CDP screencasts to JPEG frames, then a third,
-// separate browser replays the two frame streams side by side with captions, and
-// Playwright's video recorder captures that. No ffmpeg needed; if ffmpeg is on
-// PATH an .mp4 is written too.
+// separate browser replays the two frame streams side by side with captions.
+// With ffmpeg on PATH each output frame is screenshotted and encoded to a sharp
+// 1920x1080 H.264 .mp4; without it, Playwright's (lower quality) recorder is used.
 //
 // A small dot is drawn on the page and the panel to show where the pointer is.
 // It is part of the recording only, never of the extension.
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 
 const require = createRequire(import.meta.url);
@@ -50,8 +50,9 @@ const work = mkdtempSync(join(tmpdir(), 'lpz-demo-'));
 const outFile = resolve(args.out ?? join(root, 'demo-recording', `lenszap-demo-${new Date().toISOString().slice(0, 10)}.webm`));
 mkdirSync(join(outFile, '..'), { recursive: true });
 
-const PAGE = { width: 1280, height: 820 };
-const PANEL = { width: 400, height: 820 };
+// 1920x1080 in all: the page, the panel beside it, the caption bar below.
+const PAGE = { width: 1520, height: 1004 };
+const PANEL = { width: 400, height: 1004 };
 const CAPTION_H = 76;
 
 // Interests for the demo lens, unless --lens is given.
@@ -112,12 +113,12 @@ const frames = { page: [], panel: [] };
 let frameN = 0;
 async function screencast(cdp, key, size) {
   cdp.on('Page.screencastFrame', async ({ data, sessionId }) => {
-    const file = `${key}-${String(frameN++).padStart(6, '0')}.jpg`;
+    const file = `${key}-${String(frameN++).padStart(6, '0')}.png`;
     writeFileSync(join(work, file), Buffer.from(data, 'base64'));
     frames[key].push({ at: now(), file });
     cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
   });
-  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 85, maxWidth: size.width, maxHeight: size.height, everyNthFrame: 1 });
+  await cdp.send('Page.startScreencast', { format: 'png', maxWidth: size.width, maxHeight: size.height, everyNthFrame: 1 });
 }
 
 // --- The browser with the extension -----------------------------------------
@@ -152,7 +153,12 @@ const page = await context.newPage();
 await page.goto('about:blank');
 const pageCdp = await context.newCDPSession(page);
 const [{ id: tabId }] = await worker.evaluate(() => chrome.tabs.query({ active: true, lastFocusedWindow: true }));
-const panel = await context.newPage();
+// The panel gets its own window: two tabs in one headless window share a
+// surface, and the page's screencast then shrinks to the panel's size.
+const [panel] = await Promise.all([
+  context.waitForEvent('page'),
+  pageCdp.send('Target.createTarget', { url: 'about:blank', newWindow: true, width: PANEL.width, height: PANEL.height })
+]);
 await panel.setViewportSize(PANEL);
 const panelUrl = `chrome-extension://${extId}/sidepanel/sidepanel.html?tab=${tabId}`;
 await panel.goto(panelUrl);
@@ -341,7 +347,7 @@ const stage = `<!doctype html><meta charset="utf-8"><style>
   html,body{margin:0;background:#111;color:#eee;font:16px system-ui,sans-serif;overflow:hidden}
   #row{display:flex;height:${PAGE.height}px}
   #pg{width:${PAGE.width}px;height:${PAGE.height}px;display:block;background:#fff}
-  #pn{width:${PANEL.width}px;height:${PANEL.height}px;display:block;border-left:2px solid #333;background:#fff}
+  #pn{width:${PANEL.width}px;height:${PANEL.height}px;display:block;box-shadow:inset 2px 0 #333;background:#fff}
   #cap{height:${CAPTION_H}px;padding:12px 22px;box-sizing:border-box;border-top:2px solid #333}
   #card{position:absolute;left:0;top:0;width:100%;height:${PAGE.height}px;display:none;place-content:center;text-align:center;background:#14161a}
   #card b{display:block;font-size:64px;letter-spacing:-1px} #card span{display:block;opacity:.8;font-size:22px;margin-top:14px;max-width:1100px}
@@ -351,23 +357,38 @@ const stage = `<!doctype html><meta charset="utf-8"><style>
 const T = ${JSON.stringify(timeline)};
 const last = (list, t) => { let lo = 0, hi = list.length - 1, best = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (list[m].at <= t) { best = list[m]; lo = m + 1; } else hi = m - 1; } return best; };
 let shown = {};
+const segAt = (t) => t < T.segs[0].at ? T.segs[0] : T.segs.find((s) => t >= s.at && t < s.until) ?? T.segs.at(-1);
+const imgs = { page: document.getElementById('pg'), panel: document.getElementById('pn') };
+// Draw the frame for capture time t; resolves once both images are decoded.
+window.render = (t) => {
+  const waits = [];
+  for (const k of ['page', 'panel']) {
+    const f = last(T.frames[k], t);
+    if (f && shown[k] !== f.file) { imgs[k].src = f.file; shown[k] = f.file; waits.push(imgs[k].decode().catch(() => {})); }
+  }
+  const seg = segAt(t);
+  if (seg) {
+    document.getElementById('t').textContent = seg.title;
+    document.getElementById('s').textContent = seg.sub;
+    const card = document.getElementById('card'), isCard = seg === T.segs[0] || seg === T.segs.at(-1);
+    card.style.display = isCard ? 'grid' : 'none';
+    if (isCard) { card.firstChild.textContent = seg.title; card.lastChild.textContent = seg.sub; }
+    document.getElementById('sp').textContent = seg.speed > 1 ? 'model scoring, sped up ' + seg.speed + 'x' : '';
+  }
+  return Promise.all(waits);
+};
+// Output time → capture time: each caption segment plays at its own speed.
+window.outputTimes = (fps) => {
+  const out = [];
+  let t = 0;
+  while (t < T.end) { out.push(t); t += (1000 / fps) * (segAt(t)?.speed ?? 1); }
+  return out;
+};
 window.play = () => new Promise((done) => {
   let t = 0, prev = performance.now();
   const tick = (wall) => {
-    const seg = t < T.segs[0].at ? T.segs[0] : T.segs.find((s) => t >= s.at && t < s.until) ?? T.segs.at(-1);
-    t += (wall - prev) * (seg?.speed ?? 1); prev = wall;
-    for (const [k, id] of [['page', 'pg'], ['panel', 'pn']]) {
-      const f = last(T.frames[k], t);
-      if (f && shown[k] !== f.file) { document.getElementById(id).src = f.file; shown[k] = f.file; }
-    }
-    if (seg) {
-      document.getElementById('t').textContent = seg.title;
-      document.getElementById('s').textContent = seg.sub;
-      const card = document.getElementById('card'), isCard = seg === T.segs[0] || seg === T.segs.at(-1);
-      card.style.display = isCard ? 'grid' : 'none';
-      if (isCard) { card.firstChild.textContent = seg.title; card.lastChild.textContent = seg.sub; }
-      document.getElementById('sp').textContent = seg.speed > 1 ? 'model scoring, sped up ' + seg.speed + 'x' : '';
-    }
+    t += (wall - prev) * (segAt(t)?.speed ?? 1); prev = wall;
+    window.render(t);
     if (t >= T.end) return done();
     requestAnimationFrame(tick);
   };
@@ -378,30 +399,50 @@ writeFileSync(join(work, 'stage.html'), stage);
 const stageServer = createServer((req, res) => {
   const p = join(work, decodeURIComponent(new URL(req.url, 'http://x').pathname));
   if (!p.startsWith(work) || !existsSync(p)) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'content-type': p.endsWith('.html') ? 'text/html' : 'image/jpeg' });
+  res.writeHead(200, { 'content-type': p.endsWith('.html') ? 'text/html' : 'image/png' });
   res.end(readFileSync(p));
 }).listen(0, '127.0.0.1');
 await new Promise((r) => stageServer.once('listening', r));
 
 const size = { width: PAGE.width + PANEL.width, height: PAGE.height + CAPTION_H };
+const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
 const browser = await chromium.launch();
-const stageCtx = await browser.newContext({ viewport: size, recordVideo: { dir: join(work, 'video'), size } });
-const stagePage = await stageCtx.newPage();
-await stagePage.goto(`http://127.0.0.1:${stageServer.address().port}/stage.html`);
-// Preload every frame so the replay never waits on the network.
-await stagePage.evaluate(async (all) => { await Promise.all(all.map((f) => new Promise((r) => { const i = new Image(); i.onload = i.onerror = r; i.src = f; }))); },
-  [...frames.page, ...frames.panel].map((f) => f.file));
-await stagePage.evaluate(() => window.play());
-await stagePage.waitForTimeout(500);
-const video = stagePage.video();
-await stageCtx.close();
+const stageUrl = `http://127.0.0.1:${stageServer.address().port}/stage.html`;
+if (hasFfmpeg) {
+  // Frame by frame: draw each output frame, screenshot it losslessly, and
+  // pipe it to x264. Slower than real time, but sharp at full 1920x1080.
+  const FPS = 30;
+  const mp4 = outFile.replace(/\.(webm|mp4)$/, '') + '.mp4';
+  const stagePage = await (await browser.newContext({ viewport: size, deviceScaleFactor: 1 })).newPage();
+  await stagePage.goto(stageUrl);
+  const times = await stagePage.evaluate((fps) => window.outputTimes(fps), FPS);
+  const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'png', '-i', '-',
+    '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-tune', 'stillimage', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', mp4], { stdio: ['pipe', 'inherit', 'inherit'] });
+  const finished = new Promise((r) => ff.on('close', r));
+  let lastShot = null;
+  for (const [i, t] of times.entries()) {
+    const changed = await stagePage.evaluate(async (t) => { const before = document.body.innerHTML.length + [...document.images].map((x) => x.src).join(); await window.render(t); return before !== document.body.innerHTML.length + [...document.images].map((x) => x.src).join(); }, t);
+    if (changed || !lastShot) lastShot = await stagePage.screenshot({ type: 'png' });
+    if (!ff.stdin.write(lastShot)) await new Promise((r) => ff.stdin.once('drain', r));
+    if (i % (FPS * 10) === 0) console.log(`  encoding ${Math.round((100 * i) / times.length)}%`);
+  }
+  ff.stdin.end();
+  const code = await finished;
+  console.log(code === 0 ? `video: ${mp4} (${size.width}x${size.height}, ${(times.length / FPS).toFixed(1)} s)` : `ffmpeg exited ${code}`);
+} else {
+  // No ffmpeg: Playwright's recorder, in real time. Lower quality (VP8).
+  console.log('ffmpeg not found: falling back to Playwright video (lower quality). Install ffmpeg for a sharp 1080p .mp4.');
+  const stageCtx = await browser.newContext({ viewport: size, recordVideo: { dir: join(work, 'video'), size } });
+  const stagePage = await stageCtx.newPage();
+  await stagePage.goto(stageUrl);
+  await stagePage.evaluate(async (all) => { await Promise.all(all.map((f) => new Promise((r) => { const i = new Image(); i.onload = i.onerror = r; i.src = f; }))); },
+    [...frames.page, ...frames.panel].map((f) => f.file));
+  await stagePage.evaluate(() => window.play());
+  await stagePage.waitForTimeout(500);
+  const video = stagePage.video();
+  await stageCtx.close();
+  renameSync(await video.path(), outFile);
+  console.log(`video: ${outFile}`);
+}
 await browser.close();
 stageServer.close();
-renameSync(await video.path(), outFile);
-console.log(`video: ${outFile}`);
-
-if (spawnSync('ffmpeg', ['-version']).status === 0) {
-  const mp4 = outFile.replace(/\.webm$/, '.mp4');
-  const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', outFile, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', '-movflags', '+faststart', mp4]);
-  console.log(r.status === 0 ? `video: ${mp4}` : `ffmpeg failed: ${r.stderr}`);
-}
