@@ -341,7 +341,13 @@ console.log(`captured ${frames.page.length} page and ${frames.panel.length} pane
 
 // --- Replay the two streams side by side and record that ------------------------
 // Speed per caption segment: long waits on the model play faster, and say so.
-const segs = captions.map((c, i) => ({ ...c, until: captions[i + 1]?.at ?? end }));
+// A model wait plays at least 3x, and fast enough to last at most ~8 s on screen.
+const MAX_WAIT_MS = 8000;
+const segs = captions.map((c, i) => {
+  const until = captions[i + 1]?.at ?? end;
+  const speed = c.speed > 1 ? Math.max(c.speed, Math.ceil((until - c.at) / MAX_WAIT_MS)) : c.speed;
+  return { ...c, until, speed };
+});
 const timeline = { segs, frames, end, PAGE, PANEL, CAPTION_H };
 const stage = `<!doctype html><meta charset="utf-8"><style>
   html,body{margin:0;background:#111;color:#eee;font:16px system-ui,sans-serif;overflow:hidden}
