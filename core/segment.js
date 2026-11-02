@@ -70,6 +70,8 @@ export const MIN_HEADLINE_CHARS = 20;
 export const MAX_CONTAINER_CHARS = 1200;
 /** Longest container that can be skipped as a line or list of short links. */
 export const LINK_LINE_MAX_CHARS = 600;
+/** Longest card without a heading kept whole on the strength of one headline link. */
+export const CARD_MAX_CHARS = 600;
 /** A link at least this long reads as a story headline, not a tag or a control. */
 export const STORY_LINK_CHARS = 25;
 
@@ -104,6 +106,9 @@ export function splitDecision(m) {
   if (!m.containerish || m.chars > MAX_CONTAINER_CHARS) return 'split';
   // One titled item (a repo card, a story teaser) stays whole, whatever its parts.
   if (m.headings === 1 && m.storyLinks <= 1) return 'block';
+  // A card with one headline link and no heading (headline, dek, byline, comment
+  // count): one item, so the byline and comment count never stand alone.
+  if (m.headings === 0 && m.storyLinks === 1 && m.chars <= CARD_MAX_CHARS) return 'block';
   // Several headlines: a feed, a "Most read" list, a multi-story card.
   if (m.headings >= 2 || m.storyLinks >= 2) return 'split';
   return m.severalChildren ? 'split' : 'block';

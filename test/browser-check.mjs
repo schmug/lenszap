@@ -196,7 +196,13 @@ await settle();
 const atBottom = (await zappedTexts()).length;
 console.log(`live threshold: ${beforeSlide} hidden at 80%, ${atTop} at 99%, ${atBottom} at 50%`);
 assert.ok(atBottom > atTop, 'moving the confidence slider changes what is hidden right away');
-for (let i = 0; i < 30; i++) await panel.keyboard.press('ArrowRight'); // back to 80%
+// Back to 80%. Step until the slider reads 0.8: a key press can land while the
+// panel re-renders and be lost, which made a fixed count of 30 flaky.
+const zapSlider = 'input[aria-label^="Zap when"]';
+for (let i = 0; i < 40 && Math.abs(Number(await panel.inputValue(zapSlider)) - 0.8) > 1e-6; i++) {
+  await panel.focus(zapSlider);
+  await panel.keyboard.press('ArrowRight');
+}
 await page.waitForTimeout(800);
 
 // Interests: raise "celebrity gossip" from -0.5 toward 0 with the keyboard, then save.

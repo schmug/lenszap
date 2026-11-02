@@ -430,6 +430,10 @@ await test('splitDecision: one titled item stays whole, several stories split, l
   const base = { chars: 300, letters: 250, leafy: false, containerish: true, headings: 0, storyLinks: 0, links: 0, linkChars: 0, linkLetters: 0, severalChildren: false, hasControls: false };
   // A repo card: one heading, a description and a stats row (several children).
   assert.equal(splitDecision({ ...base, headings: 1, storyLinks: 1, links: 3, linkChars: 30, linkLetters: 20, severalChildren: true }), 'block');
+  // A card with no heading: one headline link, a dek, and a byline with a comment count.
+  assert.equal(splitDecision({ ...base, headings: 0, storyLinks: 1, links: 3, linkChars: 70, linkLetters: 60, severalChildren: true }), 'block');
+  // ...but a long section with one long link and several paragraphs still splits.
+  assert.equal(splitDecision({ ...base, chars: 1000, headings: 0, storyLinks: 1, links: 1, linkChars: 40, linkLetters: 35, severalChildren: true }), 'split');
   // A card holding two teasers.
   assert.equal(splitDecision({ ...base, headings: 2, storyLinks: 2, links: 2, linkChars: 80, linkLetters: 70 }), 'split');
   // A "Most read" list: one title heading, many headline links.
