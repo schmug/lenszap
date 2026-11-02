@@ -373,7 +373,7 @@ async function renderTrain(message) {
     h('p', { class: 'note', text: 'Each mark stores only the scores for that block, never its text or the page it came from, on this device only. Marks made with one scorer may not suit another.' })
   ];
 
-  const s = suggest(examples, priorities(), threshold());
+  const s = suggest(examples, priorities(), threshold(), { hideUnmatched: state.settings.hideUnmatched === true });
   if (s.needMore) {
     parts.push(h('p', { class: 'note', text: `Mark ${s.needMore} more block${s.needMore === 1 ? '' : 's'} to get a suggestion (at least ${MIN_EXAMPLES}, with some of each).` }));
   } else {
@@ -680,6 +680,17 @@ function renderSettings(message) {
       h('dt', { text: 'Threshold' }), h('dd', { text: `${pct(threshold())}${state.site.threshold !== undefined ? ' (this site)' : ''}` }),
       h('dt', { text: 'Lens' }), h('dd', { text: `${state.lens.metadata.name} v${state.lens.metadata.lensVersion}` }),
       page.rule ? h('dt', { text: 'Site rule' }) : null, page.rule ? h('dd', { text: `${page.rule}: one block per item` }) : null) : null,
+
+    h('h3', { text: 'What to hide' }),
+    (() => {
+      const box = h('input', { type: 'checkbox' });
+      box.checked = st.hideUnmatched === true;
+      box.addEventListener('change', async () => { state.settings = (await send('set-settings', { patch: { hideUnmatched: box.checked } })).settings; renderSettings(); });
+      return h('label', { class: 'check' }, box, ' Also hide blocks that match none of my interests');
+    })(),
+    h('p', { class: 'note', text: st.hideUnmatched === true
+      ? 'Anything not about an interest you weighted up is hidden, along with anything you weighted down.'
+      : 'Only blocks matching an interest you weighted down (less of this) are hidden. Everything else stays.' }),
 
     h('h3', { text: 'Display' }),
     toggle('hoverInfo', 'Show the score when I hover over a block'),

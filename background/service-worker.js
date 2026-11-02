@@ -32,6 +32,9 @@ const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65 };
 const DEFAULT_SETTINGS = {
   threshold: DEFAULT_THRESHOLD.lexical,
   scorer: 'lexical',
+  // Blocks that match none of your interests: kept unless they match a "less
+  // of this" interest. true hides them too (the zapper's original behaviour).
+  hideUnmatched: false,
   // Display: score popover on hover, scoring and zapping animations, sidebar state.
   hoverInfo: true,
   animate: true,

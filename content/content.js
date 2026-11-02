@@ -470,7 +470,7 @@
     // the panel can say what would be hidden, but nothing on the page changes.
     decisions = ledgerFailure
       ? []
-      : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored });
+      : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored, hideUnmatched: state.settings.hideUnmatched === true });
     decisionById = new Map(decisions.map((d) => [d.id, d]));
     const zap = new Set(paused() ? [] : decisions.filter((d) => d.zap).map((d) => d.id));
     for (const [id, b] of blocks) setZap(b, zap.has(id));

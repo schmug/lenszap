@@ -25,11 +25,11 @@ const THRESHOLDS = Array.from({ length: 50 }, (_, i) => Math.round((0.5 + i * 0.
 const WEIGHTS = Array.from({ length: 41 }, (_, i) => Math.round((-1 + i * 0.05) * 100) / 100);
 
 /** How many examples a setting gets wrong. */
-export function evaluate(examples, priorities, threshold) {
+export function evaluate(examples, priorities, threshold, opts = {}) {
   let falseZaps = 0;
   let missed = 0;
   for (const ex of examples) {
-    const zap = offLensConfidence(ex.matches, priorities).offLens >= threshold;
+    const zap = offLensConfidence(ex.matches, priorities, opts).offLens >= threshold;
     if (zap && ex.label === 'keep') falseZaps++;
     else if (!zap && ex.label === 'zap') missed++;
   }
@@ -61,7 +61,7 @@ function bestThreshold(offs, labels, current) {
  *           changes: {topic: string, from: number, to: number}[], unmatched: number,
  *           before: object, after: object}}
  */
-export function suggest(examples, priorities, threshold) {
+export function suggest(examples, priorities, threshold, opts = {}) {
   const usable = examples.filter((e) => e && e.matches && (e.label === 'keep' || e.label === 'zap'));
   if (usable.length < MIN_EXAMPLES) return { needMore: MIN_EXAMPLES - usable.length };
   const labels = usable.map((e) => e.label);
@@ -69,7 +69,7 @@ export function suggest(examples, priorities, threshold) {
   const weights = priorities.map((p) => ({ ...p }));
 
   const costOf = (ws) => {
-    const offs = usable.map((e) => offLensConfidence(e.matches, ws).offLens);
+    const offs = usable.map((e) => offLensConfidence(e.matches, ws, opts).offLens);
     const b = bestThreshold(offs, labels, threshold);
     const drift = ws.reduce((s, p, i) => s + Math.abs(p.weight - current[i].weight), 0);
     return { cost: b.cost + COST_PER_WEIGHT * drift, t: b.t };
@@ -97,7 +97,9 @@ export function suggest(examples, priorities, threshold) {
 
   // Kept blocks that match none of the interests: no weight or threshold can
   // keep them. The fix is a new interest, which only the reader can name.
-  const unmatched = usable.filter((e) => e.label === 'keep' && Object.values(e.matches).every((m) => m < 0.05)).length;
+  // (Only when unmatched blocks are hidden at all.)
+  const unmatched = opts.hideUnmatched === false ? 0
+    : usable.filter((e) => e.label === 'keep' && Object.values(e.matches).every((m) => m < 0.05)).length;
 
   const changes = weights
     .map((p, i) => ({ topic: p.topic, from: current[i].weight, to: p.weight }))
@@ -107,8 +109,8 @@ export function suggest(examples, priorities, threshold) {
     weights: Object.fromEntries(weights.map((p) => [p.topic, p.weight])),
     changes,
     unmatched,
-    before: evaluate(usable, current, threshold),
-    after: evaluate(usable, weights, best.t)
+    before: evaluate(usable, current, threshold, opts),
+    after: evaluate(usable, weights, best.t, opts)
   };
 }
 

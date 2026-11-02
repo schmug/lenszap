@@ -10,7 +10,7 @@ On every page the zapper splits the content into blocks, judges how well each bl
 
 ## What it does
 
-- **Zaps off-lens blocks.** Each block gets an "off-lens" confidence. A block is hidden when that confidence reaches your threshold. Interests you weight positively keep blocks; interests you weight negatively zap them.
+- **Zaps off-lens blocks.** Each block gets an "off-lens" confidence. A block is hidden when that confidence reaches your threshold. Interests you weight negatively ("less of this") zap the blocks that match them. Blocks that match none of your interests stay, unless you turn on **Settings → Also hide blocks that match none of my interests**, which hides everything not about an interest you weighted up.
 - **Zaps display ads, if you ask.** Image and iframe ads have no text to score, so the zapper finds ad slots by structure: an "Advertisement" or "Sponsored" label, an ad marker in the element's id or class, or an iframe from an ad network, around almost no text. An ad slot is hidden only when your lens has a "less of this" interest about ads (for example `advertisements` with a negative weight). Otherwise it is left alone.
 - **Side panel.** The controls live in Chrome's side panel: click the toolbar button to open it. Chrome docks it beside the page and the page reflows to fit, like any browser sidebar. It follows whichever tab you're on, with five tabs: **Ledger**, **Interests**, **Train**, **Lens**, and **Settings**. With the panel closed, the toolbar badge still shows how many blocks are hidden on the page.
 - **Ledger.** The panel lists every hidden block, with its off-lens score, with the reason it was hidden and a **Show** button. After every pass the zapper checks that the blocks hidden on the page are exactly the ones in the ledger. If they ever differ, it restores everything and says so.
@@ -123,6 +123,7 @@ npm run eval                                    # word-only baseline
 npm run eval -- --api systemone --show          # plus your llama-server model, listing every mistake
 npm run eval -- --api systemone --endpoint http://127.0.0.1:8181   # llama-server on another port
 npm run eval -- --lens my-lens.json --at 0.7    # your own lens, detail at a 70% threshold
+npm run eval -- --lens my-lens.json --hide-unmatched   # also hide blocks that match none of your interests
 npm run eval -- --api systemone --zap-ads      # with a "less of this" priority for ads added
 npm run capture -- --resplit                    # after a splitter change: re-split the saved pages
 ```
@@ -138,7 +139,8 @@ Captures and labels go to `eval/data/`, which git ignores, because captured text
 | Label | Meaning |
 |---|---|
 | keep | On your lens; should stay |
-| zap | Off your lens; should be hidden |
+| zap | Matches an interest you weighted down; should be hidden |
+| neutral | Matches none of your interests; hidden only with **Also hide blocks that match none of my interests** (`--hide-unmatched`) |
 | ad | An ad or sponsored block; should be hidden |
 | evidence | A correction or primary source; must never be hidden |
 | chrome | Page chrome the splitter shouldn't have made a block |

@@ -35,7 +35,7 @@ export const EXEMPT = Object.freeze({
  * @returns {{offLens: number, best: {topic: string, match: number, weight: number} | null,
  *            against: {topic: string, match: number, weight: number} | null}}
  */
-export function offLensConfidence(matches, priorities) {
+export function offLensConfidence(matches, priorities, { hideUnmatched = true } = {}) {
   let best = null;
   let bestKeep = 0;
   let against = null;
@@ -57,8 +57,10 @@ export function offLensConfidence(matches, priorities) {
     }
   }
   const hasPositive = priorities.some((p) => p.weight > 0);
-  // With no positive interests, only an explicit "less of this" can zap.
-  const offByAbsence = hasPositive ? 1 - bestKeep : 0;
+  // With no positive interests, only an explicit "less of this" can zap. With
+  // hideUnmatched off (the reader's choice), missing your interests is not a
+  // reason to hide either: only a "less of this" match can zap.
+  const offByAbsence = hideUnmatched && hasPositive ? 1 - bestKeep : 0;
   return { offLens: round3(Math.max(offByAbsence, worstAvoid)), best, against };
 }
 
@@ -72,12 +74,14 @@ export function offLensConfidence(matches, priorities) {
  * @param {string} input.scorer - scorer identifier, recorded in every trace
  * @param {Set<string>} [input.restored] - ids the reader restored on this page
  * @param {Map<string, string>} [input.exempt] - id → EXEMPT key, decided by the page
+ * @param {boolean} [input.hideUnmatched] - hide blocks that match none of the
+ *   positive interests (true), or only blocks matching a "less of this" (false)
  * @returns {{id: string, zap: boolean, offLens: number, trace: string, exempt?: string}[]}
  */
-export function decide({ scores, priorities, threshold, scorer, restored = new Set(), exempt = new Map() }) {
+export function decide({ scores, priorities, threshold, scorer, restored = new Set(), exempt = new Map(), hideUnmatched = true }) {
   if (!(threshold > 0 && threshold <= 1)) throw new RangeError('threshold must be in (0, 1]');
   return scores.map(({ id, matches, evidence, unscored }) => {
-    const { offLens, best, against } = offLensConfidence(matches, priorities);
+    const { offLens, best, against } = offLensConfidence(matches, priorities, { hideUnmatched });
     const exemptKey =
       exempt.get(id) ??
       (unscored ? 'unscored' : evidence ? 'evidence' : restored.has(id) ? 'restored' : undefined);
