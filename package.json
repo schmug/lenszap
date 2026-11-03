@@ -17,7 +17,8 @@
     "check-upstream": "node scripts/check-upstream.mjs",
     "capture": "node eval/capture.mjs",
     "label": "node eval/label.mjs",
-    "eval": "node eval/run.mjs"
+    "eval": "node eval/run.mjs",
+    "compare-models": "node eval/compare-models.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

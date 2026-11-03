@@ -65,10 +65,12 @@ Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/sys
 2. **Start a model in its own terminal.** `llama-server` keeps running in the foreground, so run the benchmark from a second terminal. Each command downloads its model on first run. If port 8080 is taken, use any other port and give the same one to the zapper.
 
    ```
-   llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4
+   llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4 -c 8192
    ```
 
-   If long passages fail with a "too large to process" error, add `-ub 2048`.
+   `-c 8192` caps the context at 2048 tokens per slot, plenty for one block. Without it llama-server sizes each slot to the model's full training context, and a 4B model took about 35 GB of memory in testing.
+
+   If long passages fail with a "too large to process" error, add `-ub 2048`. The vllm-d3 models need `-ub 2048 -b 2048` from the start: they read the whole passage at once, and with the default batch size llama-server crashes on the first long block.
 
    **Clef-flash isn't in released llama.cpp yet.** As of 2026-11-01 its support is an unmerged draft ([llama.cpp PR #29831](https://github.com/ggml-org/llama.cpp/pull/29831)), so release builds fail with `unknown model architecture: 'clef'`. To try it now, build that PR yourself. The PR handles one sequence per batch, so use `--parallel 1` and `--concurrency 1`:
 
@@ -148,6 +150,19 @@ Captures and labels go to `eval/data/`, which git ignores, because captured text
 
 `eval/demo/` holds the two fictional demo pages, captured and labelled, so `npm run eval -- --data eval/demo` works without capturing anything.
 
+### Comparing models
+
+`npm run compare-models` runs the eval once per decision model. For each one it starts `llama-server` on port 8182 (so one you already run on 8181 is left alone), scores your labelled pages, stops it, and moves on. It reports, at the 65% threshold, how many wanted blocks were hidden and how many should-go blocks were kept (in both modes), plus median and p95 time per block, seconds per page, and memory. Each model's scores are cached under its own name, so a re-run only asks about new blocks (pass `--fresh` to time a model again). Results go to `eval/data/results/compare-*.md`.
+
+```
+npm run compare-models -- --lens my-lens.json                         # the shortlist in eval/compare-models.mjs
+npm run compare-models -- --models ggml-org/Kev-4B-GGUF,ggml-org/vllm-d3-mini-GGUF
+```
+
+The first run downloads every model on the list (about 25 GB for the default shortlist).
+
+The first comparison (2026-11-03, Apple M4 Max, 12 pages, 538 labelled blocks, 65% threshold, `--parallel 4 -c 8192`) kept Kev-4B as the default. It hid 1 wanted block (89% precision) at 1.1 s per block median and 3.8 GB. d1-3B was as fast with a steadier p95 (2.7 s) and 2.4 GB, but hid 8 wanted blocks. The vllm-d3 models were 2–10× slower and less precise; vllm-d3-flash (9B) caught the most of what should go (33% kept) at 10.7 s per block. No model hid a correction. Every model still keeps about 40–55% of what should go in the default mode, so lowering the threshold or a better model alone won't close that gap.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
@@ -217,7 +232,7 @@ export LENSZAP_LENS=my-lens.json
 Then, in three terminals:
 
 ```
-llama-server -hf ggml-org/Kev-4B-GGUF --port 8181 --parallel 4
+llama-server -hf ggml-org/Kev-4B-GGUF --port 8181 --parallel 4 -c 8192
 npm run dev -- --site verge     # dev browser: reloads the extension and its tabs on every save
 npm run test:watch              # unit tests, re-run on every save to core/, test/, eval/
 ```

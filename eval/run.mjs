@@ -23,6 +23,8 @@
 //          --show (list every mistake with its text)  --json  --save (write results to DATA/results/)
 //          --site TEXT (only pages whose name contains TEXT, e.g. --site verge)
 //          --fresh (ask the model again instead of using DATA/cache/scores.json)
+//          --tag NAME (name the model behind the endpoint, so each model keeps its own
+//          cached scores and results; eval/compare-models.mjs passes the model's repo)
 //
 // LENSZAP_API, LENSZAP_ENDPOINT, LENSZAP_MODEL and LENSZAP_LENS set the defaults for
 // --api, --endpoint, --model and --lens, so a dev loop needs no flags.
@@ -31,7 +33,7 @@
 // scorer, the scorer code (core/model-scorer.js, core/lexical-scorer.js), the topics, and the block text,
 // so a re-run after a change to decide.js or the threshold takes seconds. A change
 // to the prompt or scorer code misses the cache on its own; swapping the model
-// behind the same endpoint does not, so pass --fresh then.
+// behind the same endpoint does not, so pass --fresh or a different --tag then.
 //
 // Model requests go only to the loopback endpoint you name.
 
@@ -57,6 +59,9 @@ const settings = {
   model: typeof args.model === 'string' ? args.model : (env.LENSZAP_MODEL ?? '')
 };
 const concurrency = Number(args.concurrency ?? 4);
+// --tag only labels the scorer (cache key and results); it is never sent to the model.
+const tag = typeof args.tag === 'string' ? args.tag : '';
+const scorerIdOf = (s) => (tag ? `${modelScorerId(s)}#${tag}` : modelScorerId(s));
 // The extension's default thresholds (background/service-worker.js).
 const atFor = (scorerId) => Number(args.at ?? (scorerId === LEXICAL_SCORER_ID ? 0.8 : 0.65));
 const THRESHOLDS = [...new Set([0.5, 0.6, 0.65, 0.7, 0.8, 0.9, ...(args.at ? [Number(args.at)] : [])])].sort();
@@ -127,7 +132,7 @@ async function scoreAll(scorer) {
     let scores;
     if (scorer === 'lexical') scores = scoreLexical(blocks, topics);
     else {
-      const id = modelScorerId(settings);
+      const id = scorerIdOf(settings);
       const keyOf = new Map(blocks.map((b) => [b.id, cacheKey(id, b.text)]));
       const cached = (b) => !args.fresh && !!cache[keyOf.get(b.id)];
       const hit = blocks.filter(cached);
@@ -170,7 +175,7 @@ if (api !== 'lexical') {
     process.exit(1);
   }
   {
-    const id = modelScorerId(settings);
+    const id = scorerIdOf(settings);
     const res = await scoreAll('model');
     mkdirSync(join(dataDir, 'cache'), { recursive: true });
     writeFileSync(cachePath, JSON.stringify(cache) + '\n');
@@ -197,49 +202,51 @@ if (args.save) {
 }
 
 if (args.json) {
-  console.log(JSON.stringify(result, null, 2));
-  process.exit(0);
-}
+  // Exit only once the write has flushed: process.exit() right after console.log
+  // cuts piped stdout off at 64 KiB (eval/compare-models.mjs reads it through a pipe).
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n', () => process.exit(0));
+} else {
 
-const p = (x) => (x == null ? '  —' : `${String(Math.round(x * 100)).padStart(3)}%`);
-const first = runs[0].rows[0].totals;
-console.log(`Blocks matching none of your interests: ${hideUnmatched ? 'hidden (--hide-unmatched)' : 'kept (the default)'}.`);
-console.log(`${dataset.length} pages, ${first.labelled} labelled blocks: ${first.keep} keep, ${first.zap} zap, ${first.neutral} neutral, ${first.ad} ad, ${first.evidence} evidence, ${first.chrome} chrome, ${first.mixed} mixed.`);
-console.log(`Bad splits (chrome + mixed): ${p(rates(first).splitProblemRate)} of labelled blocks.\n`);
-for (const run of runs) {
-  console.log(`Scorer: ${run.scorer}`);
-  if (run.timing) {
-    const t = run.timing;
-    console.log(`  Time: ${t.wallMs} ms total; per block median ${t.perBlockMedianMs} ms, p95 ${t.perBlockP95Ms} ms (concurrency ${t.concurrency}; ${t.asked} asked, ${t.cached} from the cache). Unscored: ${run.unscored}.`);
+  const p = (x) => (x == null ? '  —' : `${String(Math.round(x * 100)).padStart(3)}%`);
+  const first = runs[0].rows[0].totals;
+  console.log(`Blocks matching none of your interests: ${hideUnmatched ? 'hidden (--hide-unmatched)' : 'kept (the default)'}.`);
+  console.log(`${dataset.length} pages, ${first.labelled} labelled blocks: ${first.keep} keep, ${first.zap} zap, ${first.neutral} neutral, ${first.ad} ad, ${first.evidence} evidence, ${first.chrome} chrome, ${first.mixed} mixed.`);
+  console.log(`Bad splits (chrome + mixed): ${p(rates(first).splitProblemRate)} of labelled blocks.\n`);
+  for (const run of runs) {
+    console.log(`Scorer: ${run.scorer}`);
+    if (run.timing) {
+      const t = run.timing;
+      console.log(`  Time: ${t.wallMs} ms total; per block median ${t.perBlockMedianMs} ms, p95 ${t.perBlockP95Ms} ms (concurrency ${t.concurrency}; ${t.asked} asked, ${t.cached} from the cache). Unscored: ${run.unscored}.`);
+    }
+    console.log('  Zap at   Wanted, hidden   Should go, kept   Ads kept   Evidence hidden   Precision');
+    for (const r of run.rows) {
+      const t = r.totals;
+      console.log(
+        `  ${p(r.threshold)}     ${p(r.rates.wrongZapRate)} (${t.keptHidden.length + t.evidenceHidden.length})`.padEnd(29) +
+          `${p(r.rates.missRate)} (${t.zapMissed.length + t.adMissed.length})`.padEnd(18) +
+          `${t.adMissed.length}/${t.ad}`.padEnd(11) +
+          `${t.evidenceHidden.length}/${t.evidence}`.padEnd(18) +
+          p(r.rates.precision)
+      );
+    }
+    const at = atFor(run.scorer);
+    const detail = run.rows.find((r) => r.threshold === at);
+    console.log(`\n  Per page at ${p(at).trim()}: wanted-but-hidden / should-go-but-kept`);
+    for (const pg of detail.pages) {
+      console.log(`    ${String(pg.keptHidden.length + pg.evidenceHidden.length).padStart(3)} / ${String(pg.zapMissed.length + pg.adMissed.length).padEnd(3)}  ${pg.slug}`);
+    }
+    if (args.show) {
+      const t = detail.totals;
+      const list = (title, keys) => {
+        if (!keys.length) return;
+        console.log(`\n  ${title}:`);
+        for (const k of keys) console.log(`    - ${(textOf.get(k) ?? k).slice(0, 110)}`);
+      };
+      list('Evidence hidden (must never happen)', t.evidenceHidden);
+      list('Wanted, but hidden', t.keptHidden);
+      list('Should go, but kept', t.zapMissed);
+      list('Ads kept', t.adMissed);
+    }
+    console.log('');
   }
-  console.log('  Zap at   Wanted, hidden   Should go, kept   Ads kept   Evidence hidden   Precision');
-  for (const r of run.rows) {
-    const t = r.totals;
-    console.log(
-      `  ${p(r.threshold)}     ${p(r.rates.wrongZapRate)} (${t.keptHidden.length + t.evidenceHidden.length})`.padEnd(29) +
-        `${p(r.rates.missRate)} (${t.zapMissed.length + t.adMissed.length})`.padEnd(18) +
-        `${t.adMissed.length}/${t.ad}`.padEnd(11) +
-        `${t.evidenceHidden.length}/${t.evidence}`.padEnd(18) +
-        p(r.rates.precision)
-    );
-  }
-  const at = atFor(run.scorer);
-  const detail = run.rows.find((r) => r.threshold === at);
-  console.log(`\n  Per page at ${p(at).trim()}: wanted-but-hidden / should-go-but-kept`);
-  for (const pg of detail.pages) {
-    console.log(`    ${String(pg.keptHidden.length + pg.evidenceHidden.length).padStart(3)} / ${String(pg.zapMissed.length + pg.adMissed.length).padEnd(3)}  ${pg.slug}`);
-  }
-  if (args.show) {
-    const t = detail.totals;
-    const list = (title, keys) => {
-      if (!keys.length) return;
-      console.log(`\n  ${title}:`);
-      for (const k of keys) console.log(`    - ${(textOf.get(k) ?? k).slice(0, 110)}`);
-    };
-    list('Evidence hidden (must never happen)', t.evidenceHidden);
-    list('Wanted, but hidden', t.keptHidden);
-    list('Should go, but kept', t.zapMissed);
-    list('Ads kept', t.adMissed);
-  }
-  console.log('');
 }
