@@ -163,6 +163,20 @@ The first run downloads every model on the list (about 25 GB for the default sho
 
 The first comparison (2026-11-03, Apple M4 Max, 12 pages, 538 labelled blocks, 65% threshold, `--parallel 4 -c 8192`) kept Kev-4B as the default. It hid 1 wanted block (89% precision) at 1.1 s per block median and 3.8 GB. d1-3B was as fast with a steadier p95 (2.7 s) and 2.4 GB, but hid 8 wanted blocks. The vllm-d3 models were 2–10× slower and less precise; vllm-d3-flash (9B) caught the most of what should go (33% kept) at 10.7 s per block. No model hid a correction. Every model still keeps about 40–55% of what should go in the default mode, so lowering the threshold or a better model alone won't close that gap.
 
+### Hosted models (eval only)
+
+The eval can also score with a hosted decision model, to see how far a bigger model would move the numbers. This sends the captured page text in `eval/data/` to the provider, so it runs only with `--hosted` and a key. The extension itself never calls a hosted model.
+
+```
+# .env.hosted (git-ignored): TYPESAFE_API_KEY=…  CLOUDFLARE_ACCOUNT_ID=…  CLOUDFLARE_API_TOKEN=…
+node --env-file=.env.hosted eval/run.mjs --hosted jev --lens my-lens.json                      # Jev 1.14
+node --env-file=.env.hosted eval/run.mjs --hosted jev --model jev-1.13.0 --lens my-lens.json
+node --env-file=.env.hosted eval/run.mjs --hosted workers-ai --lens my-lens.json               # Clef-flash (9B)
+node --env-file=.env.hosted eval/run.mjs --hosted workers-ai --model clef --lens my-lens.json   # Clef (27B)
+```
+
+Each provider and model keeps its own cached scores. Timings include the network round trip.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
