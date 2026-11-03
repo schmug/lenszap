@@ -7,6 +7,10 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.3.1
+
+- Turning off Settings → hover info now closes a popover that is already open.
+
 ## 0.3.0
 
 - **Pause everywhere**, alongside pause on this site. A paused site or browser
