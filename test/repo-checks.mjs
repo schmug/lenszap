@@ -3,7 +3,8 @@
 // Repository guards that don't belong to any one module.
 // Run:  npm test   (or: node test/repo-checks.mjs)
 //
-// - manifest.json and package.json carry the same version;
+// - manifest.json, package.json, and package-lock.json carry the same
+//   MAJOR.MINOR.PATCH version, and CHANGELOG.md has an entry for it;
 // - the manifest asks for no host access beyond loopback (the "local only" rule);
 // - every code file carries an SPDX-License-Identifier header.
 
@@ -11,6 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { compareVersions, isShipped, parseVersion } from '../scripts/version.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const readJson = (p) => JSON.parse(readFileSync(join(root, p), 'utf8'));
@@ -31,7 +33,39 @@ const manifest = readJson('manifest.json');
 const pkg = readJson('package.json');
 
 test('manifest.json and package.json versions match', () => {
-  assert.equal(manifest.version, pkg.version, 'bump both together');
+  assert.equal(manifest.version, pkg.version, 'bump with `npm version patch|minor|major`');
+});
+
+test('package-lock.json version matches package.json', () => {
+  const lock = readJson('package-lock.json');
+  assert.equal(lock.version, pkg.version, 'bump with `npm version`, which updates the lock too');
+  assert.equal(lock.packages?.['']?.version, pkg.version);
+});
+
+test('version is MAJOR.MINOR.PATCH that Chrome accepts', () => {
+  assert.ok(parseVersion(manifest.version), `${manifest.version} is not X.Y.Z`);
+});
+
+test('CHANGELOG.md has an entry for the current version', () => {
+  const log = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  assert.match(log, new RegExp(`^## ${manifest.version.replaceAll('.', '\\.')}\\b`, 'm'));
+});
+
+test('version helpers compare and classify', () => {
+  assert.equal(parseVersion('1.2.3').join(), '1,2,3');
+  for (const bad of ['1.2', '1.2.3.4', '1.2.3-beta', '01.2.3', '1.2.70000', 'v1.2.3']) {
+    assert.equal(parseVersion(bad), null, bad);
+  }
+  assert.ok(compareVersions('0.10.0', '0.9.9') > 0, 'numeric, not string, order');
+  assert.ok(compareVersions('1.0.0', '0.99.99') > 0);
+  assert.equal(compareVersions('0.3.0', '0.3.0'), 0);
+  assert.ok(compareVersions('0.3.0', '0.3.1') < 0);
+  for (const f of ['manifest.json', 'core/decide.js', 'content/zap.css', 'sidepanel/sidepanel.html']) {
+    assert.ok(isShipped(f), f);
+  }
+  for (const f of ['eval/run.mjs', 'test/repo-checks.mjs', 'README.md', 'package.json', 'scripts/dev.mjs']) {
+    assert.ok(!isShipped(f), f);
+  }
 });
 
 test('manifest host permissions are loopback only', () => {
