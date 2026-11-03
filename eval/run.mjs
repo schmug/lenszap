@@ -25,6 +25,11 @@
 //          --fresh (ask the model again instead of using DATA/cache/scores.json)
 //          --tag NAME (name the model behind the endpoint, so each model keeps its own
 //          cached scores and results; eval/compare-models.mjs passes the model's repo)
+//          --hosted jev|workers-ai (score with a hosted decision model instead of a local
+//          one: TypeSafe Jev, key in TYPESAFE_API_KEY, model jev-1.14.0 by default; or
+//          Workers AI Clef, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, model clef-flash
+//          by default, or --model clef. This sends the captured page text to that provider.
+//          Eval only: the extension never calls a hosted model. See eval/hosted.mjs.)
 //
 // LENSZAP_API, LENSZAP_ENDPOINT, LENSZAP_MODEL and LENSZAP_LENS set the defaults for
 // --api, --endpoint, --model and --lens, so a dev loop needs no flags.
@@ -35,7 +40,7 @@
 // to the prompt or scorer code misses the cache on its own; swapping the model
 // behind the same endpoint does not, so pass --fresh or a different --tag then.
 //
-// Model requests go only to the loopback endpoint you name.
+// Model requests go only to the loopback endpoint you name, unless you pass --hosted.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -47,20 +52,34 @@ import { adSlotScore } from '../core/segment.js';
 import { scoreWithEndpoint, modelScorerId, isLoopbackEndpoint } from '../core/model-scorer.js';
 import { loadDataset, parseArgs, readLens } from './lib.mjs';
 import { compare, total, rates } from './metrics.mjs';
+import { hostedTarget, hostedFetch } from './hosted.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dataDir = args.data ?? join(root, 'eval/data');
 const env = process.env;
-const api = args.api ?? env.LENSZAP_API ?? 'lexical';
+// --hosted: a hosted System One model. The core scorer still builds loopback
+// requests; hostedFetch sends them to the provider (eval/hosted.mjs).
+let hosted = null;
+if (typeof args.hosted === 'string') {
+  try {
+    hosted = hostedTarget(args.hosted, env, typeof args.model === 'string' ? args.model : '');
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  console.error(`Scoring with ${hosted.label} (${hosted.model}): captured page text is sent to ${new URL(hosted.url).host}.`);
+}
+const api = hosted ? 'systemone' : (args.api ?? env.LENSZAP_API ?? 'lexical');
 const settings = {
   api,
-  endpoint: args.endpoint ?? env.LENSZAP_ENDPOINT ?? (api === 'ollama' ? 'http://localhost:11434' : 'http://127.0.0.1:8080'),
-  model: typeof args.model === 'string' ? args.model : (env.LENSZAP_MODEL ?? '')
+  endpoint: hosted ? 'http://127.0.0.1:9' : (args.endpoint ?? env.LENSZAP_ENDPOINT ?? (api === 'ollama' ? 'http://localhost:11434' : 'http://127.0.0.1:8080')),
+  model: hosted ? hosted.model : (typeof args.model === 'string' ? args.model : (env.LENSZAP_MODEL ?? ''))
 };
-const concurrency = Number(args.concurrency ?? 4);
+const modelFetch = hosted ? hostedFetch(hosted) : fetch;
+const concurrency = Number(args.concurrency ?? (hosted ? 8 : 4));
 // --tag only labels the scorer (cache key and results); it is never sent to the model.
-const tag = typeof args.tag === 'string' ? args.tag : '';
+const tag = typeof args.tag === 'string' ? args.tag : hosted ? `hosted:${args.hosted}` : '';
 const scorerIdOf = (s) => (tag ? `${modelScorerId(s)}#${tag}` : modelScorerId(s));
 // The extension's default thresholds (background/service-worker.js).
 const atFor = (scorerId) => Number(args.at ?? (scorerId === LEXICAL_SCORER_ID ? 0.8 : 0.65));
@@ -139,7 +158,7 @@ async function scoreAll(scorer) {
       const miss = blocks.filter((b) => !cached(b));
       cacheHits += hit.length;
       for (let i = 0; i < hit.length; i++) progress(scorer);
-      const fresh = miss.length ? await scoreWithEndpoint(settings, miss, topics, fetch, { concurrency, onTiming }) : [];
+      const fresh = miss.length ? await scoreWithEndpoint(settings, miss, topics, modelFetch, { concurrency, onTiming }) : [];
       for (const sc of fresh) if (!sc.unscored) cache[keyOf.get(sc.id)] = { matches: sc.matches, evidence: sc.evidence };
       scores = [...hit.map((b) => ({ id: b.id, ...cache[keyOf.get(b.id)] })), ...fresh];
     }
@@ -169,9 +188,9 @@ if (api !== 'lexical') {
     process.exit(2);
   }
   try {
-    await scoreWithEndpoint(settings, [{ id: 'warm', text: 'Warm-up passage.' }], topics, fetch);
+    await scoreWithEndpoint(settings, [{ id: 'warm', text: 'Warm-up passage.' }], topics, modelFetch);
   } catch (err) {
-    console.error(`Could not reach ${settings.endpoint} (${api}): ${err.message}`);
+    console.error(`Could not reach ${hosted ? hosted.label : settings.endpoint} (${api}): ${err.message}`);
     process.exit(1);
   }
   {
