@@ -202,49 +202,51 @@ if (args.save) {
 }
 
 if (args.json) {
-  console.log(JSON.stringify(result, null, 2));
-  process.exit(0);
-}
+  // Exit only once the write has flushed: process.exit() right after console.log
+  // cuts piped stdout off at 64 KiB (eval/compare-models.mjs reads it through a pipe).
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n', () => process.exit(0));
+} else {
 
-const p = (x) => (x == null ? '  —' : `${String(Math.round(x * 100)).padStart(3)}%`);
-const first = runs[0].rows[0].totals;
-console.log(`Blocks matching none of your interests: ${hideUnmatched ? 'hidden (--hide-unmatched)' : 'kept (the default)'}.`);
-console.log(`${dataset.length} pages, ${first.labelled} labelled blocks: ${first.keep} keep, ${first.zap} zap, ${first.neutral} neutral, ${first.ad} ad, ${first.evidence} evidence, ${first.chrome} chrome, ${first.mixed} mixed.`);
-console.log(`Bad splits (chrome + mixed): ${p(rates(first).splitProblemRate)} of labelled blocks.\n`);
-for (const run of runs) {
-  console.log(`Scorer: ${run.scorer}`);
-  if (run.timing) {
-    const t = run.timing;
-    console.log(`  Time: ${t.wallMs} ms total; per block median ${t.perBlockMedianMs} ms, p95 ${t.perBlockP95Ms} ms (concurrency ${t.concurrency}; ${t.asked} asked, ${t.cached} from the cache). Unscored: ${run.unscored}.`);
+  const p = (x) => (x == null ? '  —' : `${String(Math.round(x * 100)).padStart(3)}%`);
+  const first = runs[0].rows[0].totals;
+  console.log(`Blocks matching none of your interests: ${hideUnmatched ? 'hidden (--hide-unmatched)' : 'kept (the default)'}.`);
+  console.log(`${dataset.length} pages, ${first.labelled} labelled blocks: ${first.keep} keep, ${first.zap} zap, ${first.neutral} neutral, ${first.ad} ad, ${first.evidence} evidence, ${first.chrome} chrome, ${first.mixed} mixed.`);
+  console.log(`Bad splits (chrome + mixed): ${p(rates(first).splitProblemRate)} of labelled blocks.\n`);
+  for (const run of runs) {
+    console.log(`Scorer: ${run.scorer}`);
+    if (run.timing) {
+      const t = run.timing;
+      console.log(`  Time: ${t.wallMs} ms total; per block median ${t.perBlockMedianMs} ms, p95 ${t.perBlockP95Ms} ms (concurrency ${t.concurrency}; ${t.asked} asked, ${t.cached} from the cache). Unscored: ${run.unscored}.`);
+    }
+    console.log('  Zap at   Wanted, hidden   Should go, kept   Ads kept   Evidence hidden   Precision');
+    for (const r of run.rows) {
+      const t = r.totals;
+      console.log(
+        `  ${p(r.threshold)}     ${p(r.rates.wrongZapRate)} (${t.keptHidden.length + t.evidenceHidden.length})`.padEnd(29) +
+          `${p(r.rates.missRate)} (${t.zapMissed.length + t.adMissed.length})`.padEnd(18) +
+          `${t.adMissed.length}/${t.ad}`.padEnd(11) +
+          `${t.evidenceHidden.length}/${t.evidence}`.padEnd(18) +
+          p(r.rates.precision)
+      );
+    }
+    const at = atFor(run.scorer);
+    const detail = run.rows.find((r) => r.threshold === at);
+    console.log(`\n  Per page at ${p(at).trim()}: wanted-but-hidden / should-go-but-kept`);
+    for (const pg of detail.pages) {
+      console.log(`    ${String(pg.keptHidden.length + pg.evidenceHidden.length).padStart(3)} / ${String(pg.zapMissed.length + pg.adMissed.length).padEnd(3)}  ${pg.slug}`);
+    }
+    if (args.show) {
+      const t = detail.totals;
+      const list = (title, keys) => {
+        if (!keys.length) return;
+        console.log(`\n  ${title}:`);
+        for (const k of keys) console.log(`    - ${(textOf.get(k) ?? k).slice(0, 110)}`);
+      };
+      list('Evidence hidden (must never happen)', t.evidenceHidden);
+      list('Wanted, but hidden', t.keptHidden);
+      list('Should go, but kept', t.zapMissed);
+      list('Ads kept', t.adMissed);
+    }
+    console.log('');
   }
-  console.log('  Zap at   Wanted, hidden   Should go, kept   Ads kept   Evidence hidden   Precision');
-  for (const r of run.rows) {
-    const t = r.totals;
-    console.log(
-      `  ${p(r.threshold)}     ${p(r.rates.wrongZapRate)} (${t.keptHidden.length + t.evidenceHidden.length})`.padEnd(29) +
-        `${p(r.rates.missRate)} (${t.zapMissed.length + t.adMissed.length})`.padEnd(18) +
-        `${t.adMissed.length}/${t.ad}`.padEnd(11) +
-        `${t.evidenceHidden.length}/${t.evidence}`.padEnd(18) +
-        p(r.rates.precision)
-    );
-  }
-  const at = atFor(run.scorer);
-  const detail = run.rows.find((r) => r.threshold === at);
-  console.log(`\n  Per page at ${p(at).trim()}: wanted-but-hidden / should-go-but-kept`);
-  for (const pg of detail.pages) {
-    console.log(`    ${String(pg.keptHidden.length + pg.evidenceHidden.length).padStart(3)} / ${String(pg.zapMissed.length + pg.adMissed.length).padEnd(3)}  ${pg.slug}`);
-  }
-  if (args.show) {
-    const t = detail.totals;
-    const list = (title, keys) => {
-      if (!keys.length) return;
-      console.log(`\n  ${title}:`);
-      for (const k of keys) console.log(`    - ${(textOf.get(k) ?? k).slice(0, 110)}`);
-    };
-    list('Evidence hidden (must never happen)', t.evidenceHidden);
-    list('Wanted, but hidden', t.keptHidden);
-    list('Should go, but kept', t.zapMissed);
-    list('Ads kept', t.adMissed);
-  }
-  console.log('');
 }
