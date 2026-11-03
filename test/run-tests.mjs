@@ -847,5 +847,40 @@ await test('hosted: scoreWithEndpoint sends to the hosted URL with the key', asy
   assert.deepEqual(seen, [{ url: 'https://api.typesafe.ai/v1/systemone', auth: 'Bearer secret' }]);
 });
 
+await test('eval: hosted targets need their keys and keep the core scorer loopback-only', async () => {
+  const { hostedTarget, hostedFetch, unwrapHosted } = await import('../eval/hosted.mjs');
+  assert.throws(() => hostedTarget('jev', {}), /TYPESAFE_API_KEY/);
+  assert.throws(() => hostedTarget('workers-ai', { CLOUDFLARE_ACCOUNT_ID: 'a' }), /CLOUDFLARE_API_TOKEN/);
+  assert.throws(() => hostedTarget('nope', {}), /Unknown/);
+  const jev = hostedTarget('jev', { TYPESAFE_API_KEY: 'k' });
+  assert.equal(jev.url, 'https://api.typesafe.ai/v1/systemone');
+  assert.equal(jev.model, 'jev-1.14.0');
+  const cf = hostedTarget('workers-ai', { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 't' }, 'clef');
+  assert.equal(cf.url, 'https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef');
+  assert.equal(cf.headers.authorization, 'Bearer t');
+  assert.deepEqual(unwrapHosted({ success: true, result: { answers: { t0: { noul: 0.2 } } } }), { answers: { t0: { noul: 0.2 } } });
+  assert.deepEqual(unwrapHosted({ answers: {} }), { answers: {} });
+
+  // The request is still built for loopback; hostedFetch redirects it, adds the key, and retries a 429.
+  const calls = [];
+  let n = 0;
+  const fake = async (url, init) => {
+    calls.push({ url, init });
+    if (n++ === 0) return { ok: false, status: 429, headers: { get: () => null } };
+    const body = JSON.parse(init.body);
+    const answers = Object.fromEntries(Object.keys(body.questions).map((k) => [k, { noul: k === 't0' ? 0.9 : 0.1 }]));
+    return { ok: true, status: 200, json: async () => ({ success: true, result: { answers } }) };
+  };
+  const f = hostedFetch(cf, { fetchFn: fake, sleep: async () => {} });
+  const settings = { api: 'systemone', endpoint: 'http://127.0.0.1:9', model: cf.model };
+  const [score] = await scoreWithEndpoint(settings, [{ id: 'b1', text: 'A passage.' }], ['security', 'gossip'], f);
+  assert.equal(calls.length, 2, 'retried once after 429');
+  assert.equal(calls[1].url, cf.url);
+  assert.equal(calls[1].init.headers.authorization, 'Bearer t');
+  assert.equal(JSON.parse(calls[1].init.body).model, 'clef');
+  assert.equal(score.matches.security, 0.9);
+  assert.equal(score.matches.gossip, 0.1);
+});
+
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

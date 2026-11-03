@@ -4,3 +4,6 @@ node_modules/
 eval/data/
 demo-recording/
 .dev-profile/
+
+# API keys for eval --hosted
+.env*

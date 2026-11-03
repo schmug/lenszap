@@ -530,7 +530,9 @@
       decisionById = new Map();
     }
     drawSparks();
-    if (paused() && tipFor && !ui.train) hideTip();
+    // Paused, or hover info just turned off in Settings: take down an open
+    // popover (and the hover outline) now, not on the next mouse move.
+    if ((paused() || !hoverAllowed()) && (tipFor || hoverId)) hideTip();
     else if (tipFor) renderTip(tipFor);
     report();
   }
@@ -772,6 +774,10 @@
   let hoverTimer = null;
   let hoverId = null;
 
+  // Settings → "Show the score when I hover over a block" (on by default).
+  // Training mode needs the popover for its Keep and Zap buttons.
+  const hoverAllowed = () => state.settings.hoverInfo !== false || ui.train;
+
   function hideTip() {
     if (pinned) return;
     clearTimeout(hoverTimer);
@@ -862,7 +868,7 @@
   }
 
   document.addEventListener('pointerover', (e) => {
-    if (pinned || paused() || (state.settings.hoverInfo === false && !ui.train)) return;
+    if (pinned || paused() || !hoverAllowed()) return;
     const el = e.target instanceof Element ? e.target.closest('[data-lpz-id]') : null;
     const id = el?.getAttribute('data-lpz-id') ?? null;
     if (id === hoverId) return;

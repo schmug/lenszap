@@ -301,6 +301,28 @@ await panel.waitForTimeout(200);
 // Settings live in the panel too.
 await tab('Settings');
 assert.ok(await panel.isVisible('text=Show the score when I hover over a block'));
+// Turning hover info off takes down an open popover at once, no reload, and
+// later hovers show none; turning it back on brings hovers back.
+const hoverBox = panel.locator('label.check:has-text("Show the score when I hover over a block") input');
+assert.equal(await hoverBox.isChecked(), true, 'hover info is on by default');
+await page.hover('p:has-text("student information system is back online")');
+await page.waitForTimeout(400);
+assert.ok(await tipHtml(), 'hover popover shown before turning it off');
+await hoverBox.uncheck();
+await page.waitForTimeout(300);
+assert.equal(await tipHtml(), null, 'hover info off: open popover closes without a reload');
+assert.equal(await page.locator('[data-lpz-hover]').count(), 0, 'hover info off: no hover outline');
+await page.mouse.move(5, 5);
+await page.hover('p:has-text("student information system is back online")');
+await page.waitForTimeout(400);
+assert.equal(await tipHtml(), null, 'hover info off: no popover on hover');
+await page.mouse.move(5, 5);
+await hoverBox.check();
+await page.waitForTimeout(200);
+await page.hover('p:has-text("student information system is back online")');
+await page.waitForTimeout(400);
+assert.ok(await tipHtml(), 'hover info back on: popover shown');
+await page.mouse.move(5, 5);
 if (shots) await panel.screenshot({ path: join(shots, 'panel-settings.jpg'), quality: 85 });
 
 // The panel follows the system's light or dark setting, form controls included.

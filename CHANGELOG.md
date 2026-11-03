@@ -14,6 +14,10 @@ include a breaking change; it says so here.
   stays the default; the extension asks for the provider's host only when you
   set one up.
 
+## 0.3.1
+
+- Turning off Settings → hover info now closes a popover that is already open.
+
 ## 0.3.0
 
 - **Pause everywhere**, alongside pause on this site. A paused site or browser
