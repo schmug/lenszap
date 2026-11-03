@@ -161,6 +161,8 @@ npm run compare-models -- --models ggml-org/Kev-4B-GGUF,ggml-org/vllm-d3-mini-GG
 
 The first run downloads every model on the list (about 25 GB for the default shortlist).
 
+The first comparison (2026-11-03, Apple M4 Max, 12 pages, 538 labelled blocks, 65% threshold, `--parallel 4 -c 8192`) kept Kev-4B as the default. It hid 1 wanted block (89% precision) at 1.1 s per block median and 3.8 GB. d1-3B was as fast with a steadier p95 (2.7 s) and 2.4 GB, but hid 8 wanted blocks. The vllm-d3 models were 2–10× slower and less precise; vllm-d3-flash (9B) caught the most of what should go (33% kept) at 10.7 s per block. No model hid a correction. Every model still keeps about 40–55% of what should go in the default mode, so lowering the threshold or a better model alone won't close that gap.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:

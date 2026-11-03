@@ -23,9 +23,7 @@
 //
 // Every model's scores are cached under its own name (eval/run.mjs --tag), so a
 // re-run only asks models about blocks they haven't seen. Memory is the peak
-// resident size of llama-server, plus the model, KV-cache and compute buffers
-// llama-server reports when it loads (on Apple silicon those buffers live in
-// unified memory and may not all show in the resident size).
+// resident size of llama-server.
 //
 // Downloads come from Hugging Face through llama-server's own -hf; model
 // requests stay on 127.0.0.1.
@@ -133,19 +131,6 @@ async function stopServer(child) {
   if (child.exitCode === null) child.kill('SIGKILL');
 }
 
-/** Sum of the buffers llama-server reports at load, in MiB, by kind. */
-function buffersFromLog(log) {
-  const sum = { model: 0, kv: 0, compute: 0 };
-  for (const line of log) {
-    const m = line.match(/(\S*)\s*buffer size\s*=\s*([\d.]+)\s*MiB/i);
-    if (!m) continue;
-    const mib = Number(m[2]);
-    if (/KV/i.test(line)) sum.kv += mib;
-    else if (/compute/i.test(line)) sum.compute += mib;
-    else if (/model/i.test(line)) sum.model += mib;
-  }
-  return sum;
-}
 
 /** Run eval/run.mjs against the server; return its JSON result. */
 function runEval(model, extra) {
@@ -195,7 +180,6 @@ for (const model of models) {
       model,
       loadMs: srv.loadMs,
       peakRssMiB: Math.round(peak),
-      buffersMiB: buffersFromLog(srv.log),
       timing: run.timing,
       unscored: run.unscored,
       pages: kept.pages,
@@ -220,24 +204,22 @@ lines.push(`Model comparison, ${new Date().toISOString().slice(0, 10)}: ${ok[0]?
 lines.push('');
 lines.push('Default mode (blocks matching none of your interests are kept):');
 lines.push('');
-lines.push('| Model | Wanted, hidden | Should go, kept | Precision | Evidence hidden | Hide-unmatched: wanted hidden / should go kept | Median ms/block | p95 ms | s/page | Peak RSS | Model + KV + compute buffers | Unscored |');
-lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
+lines.push('| Model | Wanted, hidden | Should go, kept | Precision | Evidence hidden | Hide-unmatched: wanted hidden / should go kept | Median ms/block | p95 ms | s/page | Peak RSS | Unscored |');
+lines.push('|---|---|---|---|---|---|---|---|---|---|---|');
 for (const r of results) {
   if (r.error) {
-    lines.push(`| ${r.model} | failed: ${r.error.slice(0, 120).replace(/\|/g, '/')} |||||||||||`);
+    lines.push(`| ${r.model} | failed: ${r.error.slice(0, 120).replace(/\|/g, '/')} ||||||||||`);
     continue;
   }
   const k = rowAt({ rows: r.kept }, at);
   const h = rowAt({ rows: r.hidden }, at);
-  const b = r.buffersMiB;
-  const bufs = b.model + b.kv + b.compute > 0 ? `${((b.model + b.kv + b.compute) / 1024).toFixed(1)} GiB` : '—';
   const fresh = r.timing.asked > 0;
   lines.push(
     `| ${r.model} | ${pct(k.rates.wrongZapRate)} (${k.totals.keptHidden.length + k.totals.evidenceHidden.length}) | ` +
       `${pct(k.rates.missRate)} (${k.totals.zapMissed.length + k.totals.adMissed.length}) | ${pct(k.rates.precision)} | ` +
       `${k.totals.evidenceHidden.length}/${k.totals.evidence} | ${pct(h.rates.wrongZapRate)} / ${pct(h.rates.missRate)} | ` +
       `${fresh ? r.timing.perBlockMedianMs : 'cached'} | ${fresh ? r.timing.perBlockP95Ms : '—'} | ` +
-      `${fresh ? (r.timing.wallMs / 1000 / r.pages).toFixed(1) : '—'} | ${(r.peakRssMiB / 1024).toFixed(1)} GiB | ${bufs} | ${r.unscored} |`
+      `${fresh ? (r.timing.wallMs / 1000 / r.pages).toFixed(1) : '—'} | ${(r.peakRssMiB / 1024).toFixed(1)} GiB | ${r.unscored} |`
   );
 }
 lines.push('');
