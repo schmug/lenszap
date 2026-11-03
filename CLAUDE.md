@@ -27,6 +27,8 @@ npm run eval             # eval/run.mjs — wrong-zap / miss / ad / evidence / b
 npm run compare-models   # eval/compare-models.mjs — the eval once per llama-server decision model, with speed and memory
 npm run dev -- --site X  # scripts/dev.mjs — offline dev browser with the extension; reloads it on every save
 npm run test:watch       # npm test's unit tests, re-run on save
+npm version patch|minor|major   # bump package.json, lock, and manifest.json together (no commit/tag)
+npm run check-version    # scripts/version.mjs — did extension files change without a version bump? (CI on PRs)
 ```
 
 Dev-loop defaults come from `LENSZAP_API`, `LENSZAP_ENDPOINT`, `LENSZAP_LENS` (see
@@ -72,6 +74,10 @@ No build step and no runtime dependencies: load the directory unpacked.
   text stays in `eval/data/` (git-ignored); only fictional demo pages are
   committed.
 - New code files carry `SPDX-License-Identifier: Apache-2.0`.
+- **Bump the version** when a change touches anything the browser loads
+  (`manifest.json`, `background/`, `content/`, `core/`, `sidepanel/`,
+  `lenses/`): `npm version patch|minor|major`, then a `## X.Y.Z` entry in
+  CHANGELOG.md. CI fails a PR that skips it; see CONTRIBUTING.md "Versions".
 
 ## Pull requests merge themselves
 
