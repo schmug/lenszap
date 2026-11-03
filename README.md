@@ -1,6 +1,6 @@
 # LensZap
 
-A Chromium extension that hides the parts of web pages that are off your interests, judged by a small model running on your own machine. It is **built on [LensPub](https://github.com/schmug/lenspub)**: your interests are a LensPub lens, which LensZap reads, edits, and saves back as a valid new version.
+A Chromium extension that hides the parts of web pages that are off your interests, judged by a small model running on your own machine (or, if you choose, a hosted model with your own key). It is **built on [LensPub](https://github.com/schmug/lenspub)**: your interests are a LensPub lens, which LensZap reads, edits, and saves back as a valid new version.
 
 > **Not a LensPub engine.** This tool uses your LensPub lens, but unlike a LensPub engine it hides parts of pages. A conforming Lens Engine never hides content by default ([Protocol §7.3](https://github.com/schmug/lenspub/blob/main/spec/lenspub-protocol.md#73-unconditional-requirements)). This tool sits outside the protocol by design, and it is not tested by the [conformance suite](https://github.com/schmug/lenspub/blob/main/conformance/README.md). The reasoning is in [Exploration: a semantic zapper built on LensPub](https://github.com/schmug/lenspub/blob/main/docs/explorations/semantic-zapper.md), Section 5.
 
@@ -54,8 +54,30 @@ Zapping is a style change only. Nodes are never removed or rewritten, so **Befor
 | **Words only** (default) | None | Matches your topic words. It's fast and deterministic, but it zaps far too much on real pages, because a block about your topic that never uses its words looks off-lens. The demo page includes one such paragraph on purpose. |
 | **Local decision model** (recommended) | llama.cpp's `llama-server` on this machine | A decision model such as Clef-flash answers one yes/no question per topic for every block, plus one question asking whether the block is a correction or cites a source. It returns calibrated probabilities from a single forward pass, with no text to parse. Moving a slider re-runs only the decision step, never the model. |
 | **Local chat model** | Ollama, LM Studio, or any OpenAI-compatible server | Any instruction-following model, asked to return scores as JSON. It's slower and less calibrated than a decision model, but works with what you may already have installed. |
+| **Hosted model, your own key** (opt-in) | An account and key with one provider | For speed, or when you can't run a model. **Page text leaves your device**: see below. |
 
-**Only addresses on this machine are accepted** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](https://github.com/schmug/lenspub/blob/main/adr/0005-local-only-default.md)). A block counts as a correction or source if either the model or the word-level check says so.
+**The local scorers accept only addresses on this machine** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](https://github.com/schmug/lenspub/blob/main/adr/0005-local-only-default.md)). A block counts as a correction or source if either the model or the word-level check says so.
+
+### Hosted model, bring your own key
+
+Choose **A hosted model with my own key** under Settings → Scorer. LensZap runs no service of its own: requests go straight from your browser to the provider you pick, with your key.
+
+| Provider | API | Cost | In the eval (538 labelled blocks, 65%) |
+|---|---|---|---|
+| **Cloudflare Workers AI**, Clef-flash or Clef | System One | Free daily allowance on every account (10,000 neurons a day as of November 2026, roughly a few hundred pages with Clef-flash), then $0.011 per 1,000 neurons | Clef: 0 wanted blocks hidden, 8 of 18 should-go kept, 255 ms a block. Clef-flash: 3 and 7, 282 ms |
+| **TypeSafe Jev** | System One | Paid | Jev 1.14: 6 and 8, 66 ms a block |
+| **OpenRouter** | Chat | Paid, or `:free` models at about 50 requests a day (1,000 after buying $10 of credit) | Not measured |
+| **Other OpenAI-compatible service** (https) | Chat | Varies | Not measured |
+
+For comparison, the local Kev-4B hid 1 and kept 10, at 1.1 s a block.
+
+What is sent while it is on: the text of each block on the pages you open (up to 1,500 characters) and your interest topics, without their weights. Not the page address, your lens, or anything you stored. Display ads are found by layout and never sent.
+
+- **Nothing is sent before you set it up.** The provider's host is not in the extension's permissions until you press **Save** and Chrome asks you to allow it. **Forget key** removes the key and gives the permission back.
+- **Keep a site off it.** On any site, **Keep this site off the hosted model** (Settings → This site) stops anything from that site being sent. The site is then not scored, though ads are still found by layout.
+- **Pause sends nothing**, everywhere or per site, as with a local model.
+- **Your key** is stored in this browser's extension storage, apart from your settings. It is never shown to pages, the side panel, or debug reports, and never exported.
+- What the provider does with the text is up to its terms. Free tiers in particular may keep or train on what they receive.
 
 ### Running a decision model locally
 
@@ -196,7 +218,7 @@ You can load LensPub's reference engine (its `poc/` directory) at the same time;
 
 ## What it stores, and where
 
-Everything is kept in `chrome.storage.local` on this device and never synced.
+Everything is kept in `chrome.storage.local` on this device and never synced. With a hosted model on, block text goes to the provider you chose (see [Hosted model, bring your own key](#hosted-model-bring-your-own-key)); nothing below does.
 
 | Item | What it is | Leaves the device? |
 |---|---|---|
@@ -206,6 +228,7 @@ Everything is kept in `chrome.storage.local` on this device and never synced.
 | Per-site pause and threshold | Adaptation State, keyed by hostname | Never, and never written into the lens |
 | Training marks | Adaptation State: one block's scores and your Keep/Zap label, no text, no address; the last 500 | Never |
 | Model scores | A cache of page text and scores, in memory only | Never; gone when the browser stops the background worker |
+| Hosted-model key | Your API key for the provider you chose, if any | Only to that provider, with each request |
 
 When you press **Save to lens**, the zapper acts as a LensPub **Manifest Producer**, and that part does claim conformance:
 - The new version validates against [the schema](https://github.com/schmug/lenspub/blob/main/schemas/lens-manifest.schema.json).

@@ -28,9 +28,11 @@ These hold across the whole codebase. The PR template asks about them.
   pass. On a mismatch everything is restored.
 - **Never zapped:** page chrome and controls, corrections and primary sources,
   and any block the scorer returned nothing for.
-- **Local only.** The model endpoint must be loopback (`isLoopbackEndpoint`),
-  and the extension makes no other network requests. The tests fail if the
-  manifest asks for non-loopback host access.
+- **Local by default.** A local endpoint must be loopback
+  (`isLoopbackEndpoint`). The only other requests are to a hosted provider the
+  reader set up with their own key (`core/hosted.js`), whose host is an
+  optional permission. The tests fail if the manifest asks for non-loopback
+  host access up front, or for optional hosts beyond the providers'.
 - **Lenses stay history-free.** Nothing about pages read goes into a lens.
   Training marks hold scores and a label only: no text, no URL.
 - **Saved lenses** go through `core/lens-edit.js` (`commitDraft`,

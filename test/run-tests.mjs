@@ -44,6 +44,17 @@ import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
 import { pauseScope, pauseLabel, badgeFor, isPausedOn, pauseTransition } from '../core/pause.js';
+import {
+  HOSTED_PROVIDERS,
+  hostedTarget,
+  hostedOrigin,
+  hostedMissing,
+  hostedScorerId,
+  effectiveScorer,
+  unwrapHosted,
+  withRetry,
+  originPattern
+} from '../core/hosted.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -745,6 +756,95 @@ await test('eval: the demo labels match the demo captures', async () => {
       assert.ok(v in LABELS, `${slug}: unknown label ${v}`);
     }
   }
+});
+
+// --- Hosted scorer (bring your own key) ---------------------------------------
+
+await test('hosted: a hosted target is required to opt in; https only', () => {
+  // Without hosted: true, a remote URL is still refused.
+  assert.throws(() => buildSystemOneRequest({ endpoint: 'https://api.typesafe.ai' }, { id: 'b', text: 't' }, topicsT), /this machine/);
+  assert.throws(() => buildSystemOneRequest({ hosted: true, url: 'http://api.example.com/x' }, { id: 'b', text: 't' }, topicsT), /https/);
+  assert.throws(() => buildRequest({ hosted: true, api: 'openai', url: 'not a url' }, [{ id: 'b', text: 't' }], topicsT), /https/);
+});
+
+await test('hosted: Workers AI target builds the account URL and bearer header', () => {
+  const t = hostedTarget({ provider: 'workers-ai', accountId: 'acc 1', model: '' }, 'k123');
+  assert.equal(t.url, 'https://api.cloudflare.com/client/v4/accounts/acc%201/ai/run/@cf/cloudflare/clef-flash');
+  assert.equal(t.api, 'systemone');
+  const { url, init } = buildSystemOneRequest(t, { id: 'b', text: 'passage' }, topicsT);
+  assert.equal(url, t.url);
+  assert.equal(init.headers.authorization, 'Bearer k123');
+  assert.equal(init.headers['content-type'], 'application/json');
+  assert.equal(modelScorerId(t), 'hosted:workers-ai/clef-flash');
+});
+
+await test('hosted: OpenRouter and custom use chat completions', () => {
+  const o = hostedTarget({ provider: 'openrouter', model: 'some/model:free' }, 'k');
+  const { url, init } = buildRequest(o, [{ id: 'b', text: 't' }], topicsT);
+  assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(JSON.parse(init.body).model, 'some/model:free');
+  const c = hostedTarget({ provider: 'custom', endpoint: 'https://llm.example.org/v1/', model: 'm' }, 'k');
+  assert.equal(c.url, 'https://llm.example.org/v1/chat/completions');
+  assert.equal(hostedOrigin({ provider: 'custom', endpoint: 'https://llm.example.org/v1' }), 'https://llm.example.org/*');
+});
+
+await test('hosted: missing fields and keys are named, http endpoints refused', () => {
+  assert.deepEqual(hostedMissing({ provider: 'workers-ai', accountId: '' }, ''), ['accountId', 'key']);
+  assert.deepEqual(hostedMissing({ provider: 'jev' }, 'k'), []);
+  assert.deepEqual(hostedMissing({ provider: 'openrouter', model: '' }, 'k'), ['model']);
+  assert.ok(hostedMissing({ provider: 'custom', endpoint: 'http://llm.example.org', model: 'm' }, 'k').includes('endpoint'));
+  assert.deepEqual(hostedMissing({ provider: 'nope' }, 'k'), ['provider']);
+  assert.throws(() => hostedTarget({ provider: 'jev' }, ''), /needs: key/);
+  assert.equal(originPattern('http://x.example'), null);
+});
+
+await test('hosted: every provider origin is declared as optional in the manifest', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  for (const p of Object.values(HOSTED_PROVIDERS)) if (p.origin) assert.ok(manifest.optional_host_permissions.includes(p.origin), p.origin);
+});
+
+await test('hosted: a site kept off the hosted model is not scored at all', () => {
+  assert.equal(effectiveScorer({ scorer: 'hosted' }, { noHosted: true }), 'none');
+  assert.equal(effectiveScorer({ scorer: 'hosted' }, {}), 'hosted');
+  assert.equal(effectiveScorer({ scorer: 'model' }, { noHosted: true }), 'model');
+  assert.equal(effectiveScorer({}, undefined), 'lexical');
+  assert.equal(hostedScorerId({ provider: 'jev', model: '' }), 'hosted:jev/jev-1.14.0');
+});
+
+await test('hosted: Workers AI {result} wrapper is unwrapped', () => {
+  const ans = { answers: { t0: { noul: 0.9 }, t1: { noul: 0.1 }, evidence: { noul: 0.2 } } };
+  const out = parseSystemOneResponse({ success: true, result: ans }, { id: 'b' }, ['a', 'b']);
+  assert.equal(out.matches.a, 0.9);
+  assert.ok(!out.unscored);
+  assert.deepEqual(unwrapHosted({ result: ans }), ans);
+  assert.deepEqual(unwrapHosted(ans), ans);
+});
+
+await test('hosted: withRetry retries 429 and 5xx, then returns', async () => {
+  const statuses = [429, 503, 200];
+  let calls = 0;
+  const waits = [];
+  const f = withRetry(async () => ({ status: statuses[calls++], ok: statuses[calls - 1] === 200, headers: { get: () => null } }), { sleep: async (ms) => waits.push(ms) });
+  const res = await f('https://x', {});
+  assert.equal(res.status, 200);
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+  const ctl = new AbortController();
+  ctl.abort(new Error('paused'));
+  const g = withRetry(async () => ({ status: 429, headers: { get: () => '1' } }), { sleep: async () => {} });
+  await assert.rejects(() => g('https://x', { signal: ctl.signal }), /paused/);
+});
+
+await test('hosted: scoreWithEndpoint sends to the hosted URL with the key', async () => {
+  const t = hostedTarget({ provider: 'jev' }, 'secret');
+  const seen = [];
+  const fetchFn = async (url, init) => {
+    seen.push({ url, auth: init.headers.authorization });
+    return { ok: true, json: async () => ({ answers: { t0: { noul: 0.8 }, t1: { noul: 0 }, evidence: { noul: 0 } } }) };
+  };
+  const out = await scoreWithEndpoint(t, [{ id: 'b1', text: 'hello' }], ['x', 'y'], fetchFn);
+  assert.equal(out[0].matches.x, 0.8);
+  assert.deepEqual(seen, [{ url: 'https://api.typesafe.ai/v1/systemone', auth: 'Bearer secret' }]);
 });
 
 await test('eval: hosted targets need their keys and keep the core scorer loopback-only', async () => {

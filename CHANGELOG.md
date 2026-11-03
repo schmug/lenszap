@@ -7,6 +7,13 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.4.0
+
+- **Hosted scorer, opt-in.** Settings can point scoring at a hosted model with
+  your own API key, for speed or when you can't run a model locally. Local
+  stays the default; the extension asks for the provider's host only when you
+  set one up.
+
 ## 0.3.1
 
 - Turning off Settings → hover info now closes a popover that is already open.
