@@ -43,7 +43,7 @@ import {
 import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
-import { pauseScope, pauseLabel, badgeFor } from '../core/pause.js';
+import { pauseScope, pauseLabel, badgeFor, isPausedOn, pauseTransition } from '../core/pause.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -196,6 +196,21 @@ await test('pause: browser-wide and per-site pauses are independent', () => {
   assert.equal(pauseScope({ paused: false }, undefined), null);
   assert.equal(pauseLabel('everywhere'), 'Paused everywhere');
   assert.equal(pauseLabel(null), '');
+});
+
+await test('pause: either pause stops a site; each site pauses on its own', () => {
+  assert.equal(isPausedOn({}, {}, 'a.example'), false);
+  assert.equal(isPausedOn({ paused: true }, {}, 'a.example'), true, 'paused everywhere');
+  assert.equal(isPausedOn({}, { 'a.example': { paused: true } }, 'a.example'), true, 'paused on this site');
+  assert.equal(isPausedOn({}, { 'a.example': { paused: true } }, 'b.example'), false, 'another site is not paused');
+  assert.equal(isPausedOn({ paused: false }, undefined, 'a.example'), false);
+});
+
+await test('pause: a page stops on pause and starts again on resume, and only then', () => {
+  assert.equal(pauseTransition(false, true), 'pause');
+  assert.equal(pauseTransition(true, false), 'resume');
+  assert.equal(pauseTransition(true, true), null, 'switching from a site pause to a browser-wide one is still paused');
+  assert.equal(pauseTransition(false, false), null);
 });
 
 await test('pause: the toolbar badge says paused, and why, instead of a count', () => {
@@ -399,6 +414,38 @@ await test('scoreWithEndpoint: systemone runs one request per block, in order, w
   assert.equal(calls.length, 5);
   assert.equal(peak, 2);
   assert.equal(timings.length, 5);
+});
+
+await test('scoreWithEndpoint: an abort (a pause) cancels requests in flight and sends no more', async () => {
+  const ctl = new AbortController();
+  let calls = 0;
+  let sawSignal = 0;
+  const fakeFetch = (url, init) => {
+    calls++;
+    if (init.signal === ctl.signal) sawSignal++;
+    if (calls === 2) ctl.abort(new Error('paused'));
+    return new Promise((resolve, reject) => {
+      if (init.signal.aborted) return reject(init.signal.reason);
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      setTimeout(() => resolve({ ok: true, json: async () => ({ answers: {} }) }), 50);
+    });
+  };
+  const blocks = Array.from({ length: 10 }, (_, i) => ({ id: `b${i}`, text: `block ${i}` }));
+  await assert.rejects(
+    scoreWithEndpoint({ api: 'systemone', endpoint: 'http://127.0.0.1:8080' }, blocks, topicsT, fakeFetch, { concurrency: 2, signal: ctl.signal }),
+    /paused/
+  );
+  assert.equal(calls, 2, 'no request is sent after the abort');
+  assert.equal(sawSignal, 2, 'every request carries the signal');
+  // Batched APIs stop too.
+  const ctl2 = new AbortController();
+  ctl2.abort(new Error('paused'));
+  let sent = 0;
+  await assert.rejects(
+    scoreWithEndpoint({ api: 'openai', endpoint: 'http://127.0.0.1:8080' }, blocks, topicsT, async () => { sent++; }, { signal: ctl2.signal }),
+    /paused/
+  );
+  assert.equal(sent, 0, 'an already-aborted call sends nothing');
 });
 
 await test('scoreWithEndpoint: the word-level evidence guard backs up the model', async () => {

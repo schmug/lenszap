@@ -26,7 +26,7 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel, pauseTransition }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
@@ -66,7 +66,9 @@
       weight: p.topic in draftWeights() ? draftWeights()[p.topic] : p.weight
     }));
   const threshold = () => preview.threshold ?? state.site.threshold ?? state.settings.threshold;
-  // Paused everywhere (settings) or on this site (sites[host]); either stops zapping.
+  // Paused everywhere (settings) or on this site (sites[host]). Either way the
+  // page is left alone: no splitting, no model calls, no scoring, no zaps, and
+  // nothing drawn. See pause() and resume() below.
   const pausedBy = () => pauseScope(state.settings, state.site);
   const paused = () => pausedBy() !== null;
   const pct = (x) => `${Math.round(x * 100)}%`;
@@ -300,6 +302,8 @@
   };
   let inFlight = 0;
   let generation = 0; // bumped to drop answers from a superseded run
+  let timer = null; // the rescan after page changes
+  let sortTimer = null; // the re-sort after a scroll
 
   const setAttr = (b, name, value) => {
     for (const el of b.els) {
@@ -331,6 +335,7 @@
   }
 
   function enqueue(ids) {
+    if (paused()) return; // nothing is scored while paused, not even by the word scorer
     ids = ids.filter((id) => blocks.has(id));
     // Ad slots are never sent to a scorer: they are judged by structure.
     for (const id of ids) if (adSlots.has(id)) scores.set(id, adSlotScore(id, priorities()));
@@ -373,7 +378,7 @@
     const limit = Math.min(8, Math.max(1, Number(m.concurrency) || 4));
     // A decision model answers one block per request; a chat model takes a few.
     const per = m.api === 'systemone' ? 1 : 6;
-    while (!modelError && inFlight < limit && queue.length) {
+    while (!paused() && !modelError && inFlight < limit && queue.length) {
       const taken = takeNear(per);
       if (taken.length === 0) break; // the rest wait until the reader scrolls near them
       const ids = taken.filter((id) => blocks.has(id));
@@ -386,9 +391,12 @@
         requestLog.push({ n: ids.length, ms: Math.round(performance.now() - sentAt), ok });
         if (requestLog.length > 200) requestLog.shift();
       };
-      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
+      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), host })
         .then((res) => {
           if (gen !== generation) return;
+          // The extension heard about a pause before this page did: no scores,
+          // and no error either. resume() asks again for every unscored block.
+          if (res?.paused) return;
           if (!res || res.error) throw new Error(res?.error ?? 'no answer from the extension');
           logRequest(true);
           scorerId = res.scorer;
@@ -414,6 +422,35 @@
         });
     }
     report();
+  }
+
+  // Pause mid-page: drop the queue, forget requests in flight (the service
+  // worker cancels them; any answer that still arrives belongs to an old
+  // generation and is ignored), take the sparks and popover down, and put
+  // every zapped block back without animation. Scores already received are
+  // kept for resume.
+  function pause() {
+    generation++;
+    stopScoring();
+    inFlight = 0;
+    clearTimeout(timer);
+    clearTimeout(sortTimer);
+    sortTimer = null;
+    unpin();
+    apply();
+  }
+
+  // Resume: split what is new on the page, use the scores already held, and
+  // score the rest as usual, nearest the screen first (cached blocks return at
+  // once). Blocks hidden on resume zap as they would on a live page.
+  function resume() {
+    generation++;
+    stopScoring();
+    inFlight = 0;
+    modelError = null;
+    scan();
+    enqueue([...blocks.keys()].filter((id) => !scores.has(id)));
+    apply();
   }
 
   function rescoreAll() {
@@ -466,13 +503,13 @@
 
   function apply() {
     const scored = [...blocks.keys()].filter((id) => scores.has(id)).map((id) => scores.get(id));
-    // Paused: blocks are still scored and decided, so resuming is instant and
-    // the panel can say what would be hidden, but nothing on the page changes.
-    decisions = ledgerFailure
+    // Paused: nothing is decided, so nothing is hidden (zapped blocks come
+    // back without animation) and the ledger is empty.
+    decisions = ledgerFailure || paused()
       ? []
       : decide({ scores: scored, priorities: priorities(), threshold: threshold(), scorer: scorerId, restored, hideUnmatched: state.settings.hideUnmatched === true });
     decisionById = new Map(decisions.map((d) => [d.id, d]));
-    const zap = new Set(paused() ? [] : decisions.filter((d) => d.zap).map((d) => d.id));
+    const zap = new Set(decisions.filter((d) => d.zap).map((d) => d.id));
     for (const [id, b] of blocks) setZap(b, zap.has(id));
 
     const hidden = new Set(
@@ -517,8 +554,7 @@
       train: ui.train,
       rule: rule?.name ?? null,
       labelled: { keep: [...labels.values()].filter((l) => l === 'keep').length, zap: [...labels.values()].filter((l) => l === 'zap').length },
-      zapped: paused() ? [] : decisions.filter((d) => d.zap).map(entry),
-      wouldZap: paused() ? decisions.filter((d) => d.zap).map(entry) : [],
+      zapped: decisions.filter((d) => d.zap).map(entry),
       restored: decisions.filter((d) => d.exempt === 'restored').map(entry)
     };
   }
@@ -821,7 +857,7 @@
   }
 
   document.addEventListener('pointerover', (e) => {
-    if (pinned || ((paused() || state.settings.hoverInfo === false) && !ui.train)) return;
+    if (pinned || paused() || (state.settings.hoverInfo === false && !ui.train)) return;
     const el = e.target instanceof Element ? e.target.closest('[data-lpz-id]') : null;
     const id = el?.getAttribute('data-lpz-id') ?? null;
     if (id === hoverId) return;
@@ -836,7 +872,7 @@
 
   // Training mode: a click on a block marks it instead of following links.
   document.addEventListener('click', (e) => {
-    if (!ui.train) return;
+    if (!ui.train || paused()) return;
     if (e.composedPath().includes(overlayHost)) return; // a click on the popover itself
     const el = e.target instanceof Element ? e.target.closest('[data-lpz-id]') : null;
     if (!el) {
@@ -857,21 +893,20 @@
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && pinned) unpin(); });
 
   // Score what the reader scrolls to next.
-  let sortTimer = null;
   addEventListener('scroll', () => {
-    if (!queue.length || sortTimer) return;
+    if (paused() || !queue.length || sortTimer) return;
     sortTimer = setTimeout(() => { sortTimer = null; sortQueue(); pump(); }, 300);
   }, { passive: true });
-  addEventListener('resize', () => { if (queue.length) { sortQueue(); pump(); } }, { passive: true });
+  addEventListener('resize', () => { if (!paused() && queue.length) { sortQueue(); pump(); } }, { passive: true });
 
   // --- Run, and keep up with the page -------------------------------------------
 
-  enqueue(scan());
+  // A page opened while paused is not even split until the reader resumes.
+  if (!paused()) enqueue(scan());
   apply();
 
-  let timer = null;
   new MutationObserver((mutations) => {
-    if (mutations.every((m) => overlayHost.contains(m.target))) return;
+    if (paused() || mutations.every((m) => overlayHost.contains(m.target))) return;
     clearTimeout(timer);
     timer = setTimeout(() => {
       enqueue(scan());
@@ -886,8 +921,12 @@
       return JSON.stringify([topics(), state.settings.scorer, m.api, m.endpoint, m.model]);
     };
     const before = key();
+    const wasPaused = paused();
     state = await send('get-state', { host });
-    if (key() !== before) rescoreAll();
+    const change = pauseTransition(wasPaused, paused());
+    if (change === 'pause') pause();
+    else if (change === 'resume') { if (key() !== before) scores.clear(); resume(); }
+    else if (key() !== before) rescoreAll();
     else apply();
   });
 })();

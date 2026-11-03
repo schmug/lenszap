@@ -233,11 +233,15 @@ export function parseSystemOneResponse(json, block, topics) {
  * @param {{id: string, text: string}[]} blocks
  * @param {string[]} topics
  * @param {typeof fetch} fetchFn
- * @param {{concurrency?: number, onTiming?: (id: string, ms: number) => void}} [opts]
+ * An aborted `signal` (the reader paused) cancels the requests in flight and
+ * sends no more; the call then rejects with the abort reason.
+ *
+ * @param {{concurrency?: number, onTiming?: (id: string, ms: number) => void, signal?: AbortSignal}} [opts]
  */
-export async function scoreWithEndpoint(settings, blocks, topics, fetchFn, { concurrency = 4, onTiming } = {}) {
+export async function scoreWithEndpoint(settings, blocks, topics, fetchFn, { concurrency = 4, onTiming, signal } = {}) {
   const post = async (url, init) => {
-    const res = await fetchFn(url, init);
+    signal?.throwIfAborted();
+    const res = await fetchFn(url, signal ? { ...init, signal } : init);
     if (!res.ok) {
       let detail = '';
       try {
