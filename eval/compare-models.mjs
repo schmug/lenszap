@@ -19,7 +19,7 @@
 //          --llama-server PATH (default: llama-server on your PATH)
 //          --load-timeout SECONDS (first run downloads the model; default 1800)
 //          --fresh (ask each model again instead of using its cached scores)
-//          --server-args "…" (extra llama-server arguments; default "-ub 2048 -b 2048")
+//          --server-args "…" (extra llama-server arguments; default "-c 8192 -ub 2048 -b 2048")
 //
 // Every model's scores are cached under its own name (eval/run.mjs --tag), so a
 // re-run only asks models about blocks they haven't seen. Memory is the peak
@@ -58,9 +58,12 @@ const parallel = Number(args.parallel ?? 4);
 const at = Number(args.at ?? 0.65);
 const server = typeof args['llama-server'] === 'string' ? args['llama-server'] : 'llama-server';
 const loadTimeoutMs = Number(args['load-timeout'] ?? 1800) * 1000;
+// -c 8192 shares 2048 tokens per slot across --parallel 4, ample for a 1500-character
+// block plus its questions; without it llama-server sizes the KV cache to the model's
+// full training context per slot (about 35 GiB resident for a 4B model).
 // Non-causal decision models (vllm-d3) need the whole prompt in one batch: llama-server's
 // default 512-token batch aborts on a long block (GGML_ASSERT n_ubatch >= n_tokens).
-const DEFAULT_SERVER_ARGS = ['-ub', '2048', '-b', '2048'];
+const DEFAULT_SERVER_ARGS = ['-c', '8192', '-ub', '2048', '-b', '2048'];
 const extraServerArgs = typeof args['server-args'] === 'string' ? args['server-args'].split(/\s+/).filter(Boolean) : DEFAULT_SERVER_ARGS;
 const endpoint = `http://127.0.0.1:${port}`;
 
@@ -89,10 +92,16 @@ function rssMiB(pid) {
 async function startServer(model) {
   const argv = ['-hf', model, '--host', '127.0.0.1', '--port', String(port), '--parallel', String(parallel), ...extraServerArgs];
   const child = spawn(server, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+  // Collect whole lines: a chunk can end mid-line.
   const log = [];
-  const onData = (d) => log.push(...String(d).split('\n'));
-  child.stdout.on('data', onData);
-  child.stderr.on('data', onData);
+  const partial = { out: '', err: '' };
+  const collect = (k) => (d) => {
+    const lines = (partial[k] + String(d)).split('\n');
+    partial[k] = lines.pop();
+    log.push(...lines);
+  };
+  child.stdout.on('data', collect('out'));
+  child.stderr.on('data', collect('err'));
   let exited = null;
   child.on('exit', (code, signal) => { exited = { code, signal }; });
   child.on('error', (err) => { exited = { error: err.message }; });

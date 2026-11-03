@@ -65,8 +65,10 @@ Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/sys
 2. **Start a model in its own terminal.** `llama-server` keeps running in the foreground, so run the benchmark from a second terminal. Each command downloads its model on first run. If port 8080 is taken, use any other port and give the same one to the zapper.
 
    ```
-   llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4
+   llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4 -c 8192
    ```
+
+   `-c 8192` caps the context at 2048 tokens per slot, plenty for one block. Without it llama-server sizes each slot to the model's full training context, and a 4B model took about 35 GB of memory in testing.
 
    If long passages fail with a "too large to process" error, add `-ub 2048`. The vllm-d3 models need `-ub 2048 -b 2048` from the start: they read the whole passage at once, and with the default batch size llama-server crashes on the first long block.
 
@@ -228,7 +230,7 @@ export LENSZAP_LENS=my-lens.json
 Then, in three terminals:
 
 ```
-llama-server -hf ggml-org/Kev-4B-GGUF --port 8181 --parallel 4
+llama-server -hf ggml-org/Kev-4B-GGUF --port 8181 --parallel 4 -c 8192
 npm run dev -- --site verge     # dev browser: reloads the extension and its tabs on every save
 npm run test:watch              # unit tests, re-run on every save to core/, test/, eval/
 ```
