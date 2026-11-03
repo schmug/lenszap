@@ -24,6 +24,7 @@ npm run check-upstream -- /path/to/lenspub   # has LensPub's lens schema moved?
 npm run capture -- URL…   # eval/capture.mjs — real pages → blocks via the extension's splitter (eval/data/, git-ignored)
 npm run label            # eval/label.mjs — local labelling page for captured blocks
 npm run eval             # eval/run.mjs — wrong-zap / miss / ad / evidence / bad-split rates on labelled pages
+npm run compare-models   # eval/compare-models.mjs — the eval once per llama-server decision model, with speed and memory
 npm run dev -- --site X  # scripts/dev.mjs — offline dev browser with the extension; reloads it on every save
 npm run test:watch       # npm test's unit tests, re-run on save
 ```
