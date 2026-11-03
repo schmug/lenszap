@@ -72,3 +72,10 @@ No build step and no runtime dependencies: load the directory unpacked.
   text stays in `eval/data/` (git-ignored); only fictional demo pages are
   committed.
 - New code files carry `SPDX-License-Identifier: Apache-2.0`.
+
+## Pull requests merge themselves
+
+During rapid development `.github/workflows/automerge.yml` turns on auto-merge
+(squash) for every non-draft PR from a branch here, so a PR merges once the
+required checks on main pass, with no review wait. Open a PR only when it is
+ready to land; open it as a draft, or add the `no-automerge` label, to hold it.
