@@ -325,13 +325,20 @@ if (shots) await panel.screenshot({ path: join(shots, 'panel-ledger-dark.jpg'), 
 await panel.emulateMedia({ colorScheme: 'light' });
 await tab('Settings');
 
-// Pause: blocks are still scored and decided, but nothing on the page changes.
+// Pause: the zapper is inert. Nothing is hidden, scored, or drawn.
 await panel.click('#body button:text-is("Pause on this site")');
 await page.waitForFunction(() => !document.querySelector('[data-lpz-zapped], [data-lpz-zapping]'), null, { timeout: 5000 });
 assert.equal(await page.isVisible('text=mild weekend'), true, 'paused: nothing hidden');
-await panel.waitForSelector('#count:has-text("would be hidden")');
-const wouldText = await panel.textContent('#count');
-assert.ok(Number(wouldText.match(/(\d+) would be hidden/)[1]) > 0, `paused: still scored and decided (${wouldText})`);
+await panel.waitForSelector('#count:has-text("nothing scored or hidden")');
+// Content added while paused is not even split into blocks.
+await page.evaluate(() => {
+  const p = document.createElement('p');
+  p.id = 'added-while-paused';
+  p.textContent = 'A late paragraph about the mild weekend forecast and the valley rain gauges, added while paused.';
+  document.querySelector('main, article, body').append(p);
+});
+await page.waitForTimeout(1200);
+assert.equal(await page.getAttribute('#added-while-paused', 'data-lpz-id'), null, 'paused: new content is not split or scored');
 await page.hover('p:has-text("student information system is back online")');
 await page.waitForTimeout(400);
 assert.equal(await tipHtml(), null, 'paused: no hover popover');
@@ -342,6 +349,9 @@ await panel.click('#paused button:text-is("Resume on this site")');
 await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped], [data-lpz-zapping]').length > 0, null, { timeout: 5000 });
 await settle();
 assert.equal(await panel.isHidden('#paused'), true, 'no pause banner once resumed');
+assert.notEqual(await page.getAttribute('#added-while-paused', 'data-lpz-id'), null, 'resume: content added while paused is split and scored');
+await page.evaluate(() => document.getElementById('added-while-paused')?.remove());
+await settle();
 
 // Pause everywhere: the same, on every site, and independent of the site's own pause.
 await panel.click('#body button:text-is("Pause everywhere")');
@@ -435,15 +445,18 @@ const judge = (text) => {
 let modelCalls = 0;
 let inFlight = 0;
 let maxInFlight = 0;
+let modelDelay = 40; // a model takes a moment
+let aborted = 0; // requests the extension cancelled before the answer
 const modelServer = createServer((req, res) => {
   let raw = '';
   inFlight++;
   maxInFlight = Math.max(maxInFlight, inFlight);
-  res.on('finish', () => inFlight--);
+  res.on('close', () => { inFlight--; if (!res.writableFinished) aborted++; });
   req.on('data', (c) => (raw += c));
   req.on('end', async () => {
     modelCalls++;
-    await new Promise((r) => setTimeout(r, 40)); // a model takes a moment
+    await new Promise((r) => setTimeout(r, modelDelay));
+    if (res.destroyed) return;
     const body = JSON.parse(raw);
     if (req.url === '/v1/systemone') {
       // Decision-model API: one block per request, a noul question per topic.
@@ -544,6 +557,56 @@ await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
 await page.waitForFunction(() => document.querySelector('p:last-of-type')?.hasAttribute('data-lpz-zapped'), null, { timeout: 15000 });
 assert.ok(modelCalls > longAtTop && modelCalls < 40, `long page: scrolling to the end scores what is near it (${modelCalls} of 40)`);
 console.log(`long page: ${longAtTop} of 40 blocks scored at the top, ${modelCalls} after jumping to the end`);
+
+// --- Pause with a model: no requests while paused, and a pause mid-page cancels them ---
+const freshPage = (tag) => '<!doctype html><meta charset="utf-8"><title>Pause page (fictional)</title><body>' +
+  Array.from({ length: 6 }, (_, i) => `<p>Paragraph ${i + 1} of the ${tag} page, about the hill town bus timetable and its new evening routes, item ${i + 1}.</p>`).join('') +
+  '</body>';
+await context.route('https://pause.example/**', (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: freshPage('first') }));
+await context.route('https://pause2.example/**', (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: freshPage('second') }));
+const setPausedEverywhere = (on) => worker.evaluate(async (on) => {
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({ settings: { ...settings, paused: on } });
+}, on);
+const anySpark = () => findLayerNode((x) => x.nodeName === 'svg' && attrsOf(x).class === 'spark').catch(() => null);
+
+// A site opened while paused: no model requests, no blocks, no spark, nothing hidden.
+await page.goto('about:blank');
+await worker.evaluate(() => chrome.storage.local.set({ sites: { 'pause.example': { paused: true } } }));
+modelCalls = 0;
+await page.goto('https://pause.example/');
+await page.waitForTimeout(1500);
+assert.equal(modelCalls, 0, 'paused on this site: the model is never asked');
+assert.equal(await page.$('[data-lpz-id]'), null, 'paused on this site: the page is not even split');
+assert.equal(await anySpark(), null, 'paused on this site: no scoring spark');
+// Resume: scored and zapped as usual.
+await worker.evaluate(() => chrome.storage.local.set({ sites: {} }));
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
+assert.ok(modelCalls > 0, 'resume on this site: the model is asked again');
+
+// Pause everywhere mid-page, with slow requests in flight.
+await page.goto('about:blank');
+modelDelay = 4000;
+modelCalls = 0;
+aborted = 0;
+await page.goto('https://pause2.example/');
+for (let i = 0; i < 100 && !(inFlight > 0 && (await anySpark())); i++) await page.waitForTimeout(25);
+assert.ok(inFlight > 0, 'mid-page: requests are in flight before the pause');
+await setPausedEverywhere(true);
+for (let i = 0; i < 60 && inFlight > 0; i++) await page.waitForTimeout(25);
+assert.equal(inFlight, 0, 'mid-page pause: requests in flight are cancelled at once');
+assert.ok(aborted > 0, `mid-page pause: the model server saw the requests cancelled (${aborted})`);
+const callsAtPause = modelCalls;
+await page.waitForTimeout(modelDelay + 500); // past when the cancelled answers would have come
+assert.equal(modelCalls, callsAtPause, `mid-page pause: no more requests while paused (${modelCalls - callsAtPause} sent)`);
+assert.equal(await anySpark(), null, 'mid-page pause: the sparks are taken down');
+assert.equal(await page.$('[data-lpz-zapped], [data-lpz-zapping]'), null, 'mid-page pause: nothing is hidden');
+// Resume everywhere: the blocks left unscored are scored and zapped.
+modelDelay = 40;
+await setPausedEverywhere(false);
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
+assert.ok(modelCalls > callsAtPause, 'resume everywhere: scoring starts again');
+console.log(`pause: 0 requests while paused, ${aborted} in-flight request(s) cancelled mid-page, scoring resumed after`);
 
 await context.close();
 server.close();

@@ -22,7 +22,7 @@
 
 import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
-import { badgeFor } from '../core/pause.js';
+import { badgeFor, isPausedOn } from '../core/pause.js';
 
 // Default zap threshold per scorer. The word-only scorer's confidence is coarse,
 // so it waits for 80%. For a model, the first eval (Kev-4B, 508 labelled
@@ -109,8 +109,20 @@ function noteError(m, err, ms, blocks) {
   if (recentErrors.length > 20) recentErrors.shift();
 }
 
-async function scoreWithModel(blocks, topics) {
-  const { settings } = await load();
+// Model requests in flight, by the site they score for, so a pause can cancel
+// them. A pause (everywhere or on one site) aborts that site's requests at
+// once, and score-model refuses new ones while paused, so a page that has not
+// yet heard about the pause cannot start the model either.
+const inFlight = new Map(); // AbortController → host
+async function abortPausedRequests() {
+  if (!inFlight.size) return;
+  const { settings, sites } = await load();
+  for (const [ctl, host] of inFlight) if (isPausedOn(settings, sites, host)) ctl.abort(new Error('paused'));
+}
+
+async function scoreWithModel(blocks, topics, host = null) {
+  const { settings, sites } = await load();
+  if (host != null && isPausedOn(settings, sites, host)) return { paused: true, scores: [] };
   const m = settings.model;
   await loadCache();
   const results = new Map();
@@ -121,12 +133,17 @@ async function scoreWithModel(blocks, topics) {
     else todo.push(b);
   }
   const t0 = Date.now();
+  const ctl = new AbortController();
+  if (host != null && todo.length) inFlight.set(ctl, host);
   let fresh;
   try {
-    fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i));
+    fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i), { signal: ctl.signal });
   } catch (err) {
+    if (ctl.signal.aborted) return { paused: true, scores: [] };
     noteError(m, err, Date.now() - t0, todo.length);
     throw err;
+  } finally {
+    inFlight.delete(ctl);
   }
   fresh.forEach((r, i) => {
     results.set(r.id, r);
@@ -293,8 +310,8 @@ const handlers = {
     return { recentErrors: [...recentErrors], cachedScores: scoreCache.size };
   },
 
-  async 'score-model'({ blocks, topics }) {
-    return scoreWithModel(blocks, topics);
+  async 'score-model'({ blocks, topics, host }) {
+    return scoreWithModel(blocks, topics, host ?? null);
   },
 
   async 'test-model'() {
@@ -324,4 +341,5 @@ chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() =>
 syncGlobalBadge();
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) syncGlobalBadge();
+  if (area === 'local' && (changes.settings || changes.sites)) abortPausedRequests();
 });

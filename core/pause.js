@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Pause state. The reader can pause zapping everywhere (settings.paused) or on
-// one site (sites[host].paused). Either way nothing is hidden and nothing is
-// drawn on the page; blocks are still scored so resuming is instant. The two
-// are independent: resuming everywhere leaves a site's own pause in place.
+// one site (sites[host].paused). Either way the zapper is inert on the page:
+// no model calls, no scoring, nothing hidden, nothing drawn. Pausing mid-page
+// stops the queue and cancels requests already sent. Resuming picks up where
+// it stopped: scores that arrived before the pause (and the session cache) are
+// used at once, and the rest is scored as usual. The two pauses are
+// independent: resuming everywhere leaves a site's own pause in place.
 // Pure and DOM-free.
 
 /**
@@ -16,6 +19,21 @@ export function pauseScope(settings, site) {
   if (all && here) return 'both';
   if (all) return 'everywhere';
   if (here) return 'site';
+  return null;
+}
+
+/** Whether zapping is paused on `host`, from stored settings and sites. */
+export function isPausedOn(settings, sites, host) {
+  return pauseScope(settings, sites?.[host]) !== null;
+}
+
+/**
+ * What a change of state means for a page: 'pause' (stop everything now),
+ * 'resume' (start scoring again), or null (no change).
+ */
+export function pauseTransition(wasPaused, nowPaused) {
+  if (!wasPaused && nowPaused) return 'pause';
+  if (wasPaused && !nowPaused) return 'resume';
   return null;
 }
 

@@ -119,9 +119,7 @@ function renderHeader() {
   count.replaceChildren();
   if (!page) count.textContent = 'Not running on this page';
   else if (page.paused) {
-    count.textContent = `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')} · ${page.wouldZap.length} would be hidden`;
-    if (page.progress.total) count.append(h('span', { class: 'scoring', text: ` · scoring ${page.progress.done}/${page.progress.total}` }));
-    if (page.progress.later) count.append(h('span', { class: 'scoring', text: ` · ${page.progress.later} more as you scroll` }));
+    count.textContent = `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')} · nothing scored or hidden`;
   }
   else {
     count.append(h('strong', { text: String(page.zapped.length) }), ` hidden of ${page.blocks}`);
@@ -212,7 +210,7 @@ function renderLedger(force = false) {
   parts.push(h('p', { class: 'note' },
     page.zapped.length
       ? 'Every hidden block is listed here. Show puts it back on this page. Hover any block on the page for its score.'
-      : page.paused ? `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')}: nothing is hidden and nothing is drawn on the page. Blocks are still scored, so resuming is instant. ${page.wouldZap.length} block${page.wouldZap.length === 1 ? '' : 's'} would be hidden.` : page.progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
+      : page.paused ? `${pauseLabel(pausedBy() ?? page.pausedBy ?? 'site')}: nothing is hidden and nothing is drawn on the page. The model is not asked and nothing is scored until you resume; scores from before the pause are kept, so resuming is quick.` : page.progress.total ? 'Scoring… blocks are zapped as answers arrive.' : 'Nothing hidden on this page.'));
   if (page.zapped.length) parts.push(h('div', { class: 'actions' }, h('button', { text: 'Restore all', on: { click: act('restore-all') } })));
   const entry = (d, button) =>
     h('li', { class: 'entry' },
@@ -223,10 +221,6 @@ function renderLedger(force = false) {
       h('div', { class: 'why', text: d.trace }));
   parts.push(h('ul', {}, page.zapped.map((d) =>
     entry(d, h('button', { text: 'Show', 'aria-label': `Show hidden block: ${d.snippet.slice(0, 60)}`, on: { click: act('restore', { id: d.id }) } })))));
-  if (page.paused && page.wouldZap.length) {
-    parts.push(h('h3', { text: 'Would be hidden' }));
-    parts.push(h('ul', {}, page.wouldZap.map((d) => entry(d, null))));
-  }
   if (page.restored.length) {
     parts.push(h('h3', { text: 'Restored on this page' }));
     parts.push(h('ul', {}, page.restored.map((d) =>
@@ -665,8 +659,8 @@ function renderSettings(message) {
       on: { click: () => setPausedEverywhere(!pausedAll) }
     })),
     h('p', { class: 'note', text: pausedAll
-      ? 'Paused in every tab: nothing is hidden on any site. Per-site pauses are kept and still apply after you resume.'
-      : 'Stops zapping on every site at once. Blocks are still scored, so resuming is instant.' }),
+      ? 'Paused in every tab: the model is not asked, nothing is scored, and nothing is hidden on any site. Per-site pauses are kept and still apply after you resume.'
+      : 'Stops the model, scoring, and zapping on every site at once. Scores from before the pause are kept, so resuming is quick.' }),
     h('h3', { text: host ? `This site: ${host}` : 'This site' }),
     h('div', { class: 'actions' }, h('button', {
       'aria-pressed': String(paused),
