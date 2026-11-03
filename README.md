@@ -148,6 +148,17 @@ Captures and labels go to `eval/data/`, which git ignores, because captured text
 
 `eval/demo/` holds the two fictional demo pages, captured and labelled, so `npm run eval -- --data eval/demo` works without capturing anything.
 
+### Comparing models
+
+`npm run compare-models` runs the eval once per decision model. For each one it starts `llama-server` on port 8182 (so one you already run on 8181 is left alone), scores your labelled pages, stops it, and moves on. It reports, at the 65% threshold, how many wanted blocks were hidden and how many should-go blocks were kept (in both modes), plus median and p95 time per block, seconds per page, and memory. Each model's scores are cached under its own name, so a re-run only asks about new blocks (pass `--fresh` to time a model again). Results go to `eval/data/results/compare-*.md`.
+
+```
+npm run compare-models -- --lens my-lens.json                         # the shortlist in eval/compare-models.mjs
+npm run compare-models -- --models ggml-org/Kev-4B-GGUF,ggml-org/vllm-d3-mini-GGUF
+```
+
+The first run downloads every model on the list (about 25 GB for the default shortlist).
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
