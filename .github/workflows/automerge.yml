@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Rapid-development mode: every non-draft PR from a branch in this repository
+# merges itself (squash) as soon as main's required checks pass. Add the
+# `no-automerge` label to hold a PR; remove it to let it go again.
+# Needs Settings → General → "Allow auto-merge" turned on.
+name: Automerge
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, labeled, unlabeled]
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  automerge:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.html_url }}
+      HOLD: ${{ contains(github.event.pull_request.labels.*.name, 'no-automerge') }}
+    steps:
+      - name: Hold
+        if: env.HOLD == 'true'
+        run: gh pr merge --disable-auto "$PR" || true
+      - name: Enable auto-merge
+        if: env.HOLD != 'true'
+        run: gh pr merge --auto --squash "$PR"

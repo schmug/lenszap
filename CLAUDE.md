@@ -84,3 +84,10 @@ No build step and no runtime dependencies: load the directory unpacked.
   (`manifest.json`, `background/`, `content/`, `core/`, `sidepanel/`,
   `lenses/`): `npm version patch|minor|major`, then a `## X.Y.Z` entry in
   CHANGELOG.md. CI fails a PR that skips it; see CONTRIBUTING.md "Versions".
+
+## Pull requests merge themselves
+
+During rapid development `.github/workflows/automerge.yml` turns on auto-merge
+(squash) for every non-draft PR from a branch here, so a PR merges once the
+required checks on main pass, with no review wait. Open a PR only when it is
+ready to land; open it as a draft, or add the `no-automerge` label, to hold it.
