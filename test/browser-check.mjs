@@ -608,6 +608,41 @@ await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').
 assert.ok(modelCalls > callsAtPause, 'resume everywhere: scoring starts again');
 console.log(`pause: 0 requests while paused, ${aborted} in-flight request(s) cancelled mid-page, scoring resumed after`);
 
+// --- Hosted model: nothing is sent until it is set up, and never from a site kept off it ---
+// The real provider path (key, granted host, https) is covered by the unit tests;
+// here: a half-set-up hosted scorer sends nothing anywhere and hides nothing.
+await context.route('https://hosted.example/**', (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: freshPage('hosted') }));
+await page.goto('about:blank');
+await worker.evaluate((settings) => chrome.storage.local.set({ settings, sites: {}, hostedKeys: {} }), {
+  threshold: 0.65, scorer: 'hosted', hideUnmatched: true,
+  model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 },
+  hosted: { provider: 'jev', model: '', accountId: '', endpoint: '', concurrency: 2 }
+});
+modelCalls = 0;
+await page.goto('https://hosted.example/');
+await page.waitForTimeout(1500);
+assert.equal(modelCalls, 0, 'hosted without a key: the local model is not asked either');
+assert.equal(await page.$('[data-lpz-zapped]'), null, 'hosted without a key: nothing is hidden');
+// A key but no granted host: still nothing sent.
+await page.goto('about:blank');
+await worker.evaluate(() => chrome.storage.local.set({ hostedKeys: { jev: 'test-key' } }));
+const granted = await worker.evaluate(() => chrome.permissions.contains({ origins: ['https://api.typesafe.ai/*'] }));
+assert.equal(granted, false, 'no hosted host is granted up front');
+await page.goto('https://hosted.example/');
+await page.waitForTimeout(1500);
+assert.equal(await page.$('[data-lpz-zapped]'), null, 'hosted without access granted: nothing is hidden');
+// A site kept off the hosted model: split, but not scored or sent.
+await page.goto('about:blank');
+await worker.evaluate(() => chrome.storage.local.set({ sites: { 'hosted.example': { noHosted: true } } }));
+await page.goto('https://hosted.example/');
+await page.waitForTimeout(1500);
+assert.equal(await page.$('[data-lpz-zapped]'), null, 'kept off the hosted model: nothing is hidden');
+assert.equal(modelCalls, 0, 'kept off the hosted model: no model is asked');
+const keysInPage = await page.evaluate(() => document.documentElement.outerHTML.includes('test-key'));
+assert.equal(keysInPage, false, 'the hosted key never reaches the page');
+await worker.evaluate(() => chrome.storage.local.set({ sites: {}, hostedKeys: {} }));
+console.log('hosted: nothing sent without a key, without granted access, or on a site kept off it');
+
 await context.close();
 server.close();
 modelServer.close();

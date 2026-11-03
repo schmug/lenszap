@@ -9,6 +9,8 @@
 //   settings     confidence threshold, scorer choice, and the browser-wide pause
 //   sites        per-site pause and threshold, keyed by hostname
 //   training     the reader's Keep/Zap marks: scores only, no text, no URLs
+//   hostedKeys   API keys for hosted scorers, by provider; never sent to pages
+//                or the side panel, never exported
 // Only `lens` is ever exported. draftWeights, sites, and training are Adaptation State in
 // the protocol's sense (ADR-0006): local, private, and never written into the
 // manifest, because a hostname next to a preference is reading history.
@@ -19,15 +21,21 @@
 // (localhost or 127.0.0.1, enforced in core/model-scorer.js); nothing ever
 // leaves the device. The other fetch() here loads the bundled sample lens
 // from the extension's own package.
+//
+// The exception the reader opts into: the hosted scorer (core/hosted.js), with
+// the reader's own key. Block text then goes to that one provider, over https,
+// only after the reader granted its host in Settings, never on a site they
+// kept off it, and never while paused.
 
 import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 import { badgeFor, isPausedOn } from '../core/pause.js';
+import { DEFAULT_HOSTED, hostedTarget, hostedOrigin, hostedScorerId, effectiveScorer, withRetry, HOSTED_PROVIDERS } from '../core/hosted.js';
 
 // Default zap threshold per scorer. The word-only scorer's confidence is coarse,
 // so it waits for 80%. For a model, the first eval (Kev-4B, 508 labelled
 // blocks) found 60-65% the best balance: 80% left over half of what should go.
-const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65 };
+const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65, hosted: 0.65 };
 
 const DEFAULT_SETTINGS = {
   threshold: DEFAULT_THRESHOLD.lexical,
@@ -43,7 +51,10 @@ const DEFAULT_SETTINGS = {
   paused: false,
   // llama-server's decision endpoint; the model is whatever llama-server loaded.
   // concurrency: requests in flight at once (match llama-server's --parallel).
-  model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '', concurrency: 4 }
+  model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '', concurrency: 4 },
+  // Hosted scorer, bring your own key (core/hosted.js). Used only when
+  // scorer is 'hosted'. The key is kept apart, in hostedKeys.
+  hosted: DEFAULT_HOSTED
 };
 
 async function bundledLens() {
@@ -56,7 +67,12 @@ async function load() {
   return {
     lens: s.lens ?? (await bundledLens()),
     draftWeights: s.draftWeights ?? {},
-    settings: { ...DEFAULT_SETTINGS, ...(s.settings ?? {}), model: { ...DEFAULT_SETTINGS.model, ...(s.settings?.model ?? {}) } },
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(s.settings ?? {}),
+      model: { ...DEFAULT_SETTINGS.model, ...(s.settings?.model ?? {}) },
+      hosted: { ...DEFAULT_SETTINGS.hosted, ...(s.settings?.hosted ?? {}) }
+    },
     sites: s.sites ?? {}
   };
 }
@@ -120,10 +136,46 @@ async function abortPausedRequests() {
   for (const [ctl, host] of inFlight) if (isPausedOn(settings, sites, host)) ctl.abort(new Error('paused'));
 }
 
+async function hostedKey(provider) {
+  const { hostedKeys = {} } = await chrome.storage.local.get('hostedKeys');
+  return hostedKeys[provider] ?? '';
+}
+
+// What scores blocks for these settings: the local endpoint, or the hosted
+// target with the reader's key. Throws if hosted is chosen but not set up, or
+// its host permission was not granted.
+async function activeModel(settings) {
+  if (settings.scorer !== 'hosted') return settings.model;
+  const target = hostedTarget(settings.hosted, await hostedKey(settings.hosted.provider));
+  const origin = hostedOrigin(settings.hosted);
+  if (!origin || !(await chrome.permissions.contains({ origins: [origin] }))) {
+    throw new Error(`LensZap has no access to ${origin ?? 'the hosted endpoint'}. Save the hosted settings again to grant it.`);
+  }
+  return target;
+}
+
+// Settings without anything secret, for the cache key and errors.
+const scorerOnly = (settings) => (settings.scorer === 'hosted' ? hostedTargetId(settings) : settings.model);
+const hostedTargetId = (settings) => {
+  const p = HOSTED_PROVIDERS[settings.hosted.provider];
+  const model = settings.hosted.model || p?.defaultModel || 'default';
+  return { api: p?.api ?? 'hosted', model, endpoint: p?.label ?? 'hosted', scorerId: hostedScorerId(settings.hosted) };
+};
+
 async function scoreWithModel(blocks, topics, host = null) {
   const { settings, sites } = await load();
   if (host != null && isPausedOn(settings, sites, host)) return { paused: true, scores: [] };
-  const m = settings.model;
+  // A site kept off the hosted model sends nothing, even if a page asks.
+  if (host != null && effectiveScorer(settings, sites[host]) === 'none') return { scores: [], scorer: 'none' };
+  const id = scorerOnly(settings);
+  let m;
+  try {
+    m = await activeModel(settings);
+  } catch (err) {
+    noteError(id, err, 0, blocks.length);
+    throw err;
+  }
+  const fetchFn = m.hosted ? withRetry((u, i) => fetch(u, i)) : (u, i) => fetch(u, i);
   await loadCache();
   const results = new Map();
   const todo = [];
@@ -137,10 +189,10 @@ async function scoreWithModel(blocks, topics, host = null) {
   if (host != null && todo.length) inFlight.set(ctl, host);
   let fresh;
   try {
-    fresh = await scoreWithEndpoint(m, todo, topics, (u, i) => fetch(u, i), { signal: ctl.signal });
+    fresh = await scoreWithEndpoint(m, todo, topics, fetchFn, { signal: ctl.signal, concurrency: m.concurrency ?? 4 });
   } catch (err) {
     if (ctl.signal.aborted) return { paused: true, scores: [] };
-    noteError(m, err, Date.now() - t0, todo.length);
+    noteError(id, err, Date.now() - t0, todo.length);
     throw err;
   } finally {
     inFlight.delete(ctl);
@@ -177,13 +229,34 @@ async function syncGlobalBadge() {
 const handlers = {
   async 'get-state'({ host }) {
     const st = await load();
+    const site = st.sites[host] ?? {};
+    const scorer = effectiveScorer(st.settings, site);
+    const sc = scorerOnly(st.settings);
     return {
       lens: st.lens,
       draftWeights: st.draftWeights,
       settings: st.settings,
-      site: st.sites[host] ?? {},
+      site,
+      // What scores this site, without secrets: the page paces its requests by it.
+      scoring: { scorer, api: sc.api, concurrency: (st.settings.scorer === 'hosted' ? st.settings.hosted : st.settings.model).concurrency ?? 4, id: modelScorerId(sc) },
       unsupported: unsupportedFeatures(st.lens)
     };
+  },
+
+  // Which providers have a saved key. The keys themselves never leave the worker.
+  async 'hosted-keys'() {
+    const { hostedKeys = {} } = await chrome.storage.local.get('hostedKeys');
+    return { saved: Object.fromEntries(Object.keys(hostedKeys).map((p) => [p, true])) };
+  },
+
+  async 'set-hosted-key'({ provider, key }) {
+    if (!HOSTED_PROVIDERS[provider]) return { error: 'unknown provider' };
+    const { hostedKeys = {} } = await chrome.storage.local.get('hostedKeys');
+    const k = String(key ?? '').trim();
+    if (k) hostedKeys[provider] = k;
+    else delete hostedKeys[provider];
+    await chrome.storage.local.set({ hostedKeys });
+    return { ok: true };
   },
 
   async 'set-draft'({ weights }) {
@@ -193,7 +266,7 @@ const handlers = {
 
   async 'set-settings'({ patch }) {
     const { settings } = await load();
-    const next = { ...settings, ...patch, model: { ...settings.model, ...(patch.model ?? {}) } };
+    const next = { ...settings, ...patch, model: { ...settings.model, ...(patch.model ?? {}) }, hosted: { ...settings.hosted, ...(patch.hosted ?? {}) } };
     // Switching scorer moves the threshold to the new scorer's default, unless
     // the reader had already moved it away from the old one's.
     if (patch.scorer && patch.scorer !== settings.scorer && patch.threshold === undefined &&
@@ -298,11 +371,12 @@ const handlers = {
     await loadCache();
     const { settings } = await load();
     const scores = [];
+    const m = scorerOnly(settings);
     for (const b of blocks) {
-      const hit = scoreCache.get(cacheKey(settings.model, topics, b.text));
+      const hit = scoreCache.get(cacheKey(m, topics, b.text));
       if (hit) scores.push({ ...hit, id: b.id });
     }
-    return { scores, scorer: modelScorerId(settings.model) };
+    return { scores, scorer: modelScorerId(m) };
   },
 
   async 'debug-info'() {

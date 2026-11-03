@@ -20,10 +20,16 @@ Only the latest release on `main` gets fixes.
 These are the security and privacy properties the extension is built to keep.
 A way to break any of them is a security problem worth reporting.
 
-- **Local only.** The model endpoint must be a loopback address
+- **Local by default.** A local model endpoint must be a loopback address
   (`localhost`, `127.0.0.1`, or `[::1]`). The manifest grants host access to
-  loopback only, and the extension makes no other network requests. Page text
-  is sent to your local model and nowhere else.
+  loopback only. Page text is sent to your local model and nowhere else.
+- **Hosted only when you set it up.** The one exception is a hosted model you
+  choose under Settings with your own key. Its host (Cloudflare, TypeSafe,
+  OpenRouter, or an https endpoint you name) is an optional permission, asked
+  for when you save and given back by **Forget key**. Only block text and your
+  interest topics are sent, only to that host, never from a site you keep off
+  the hosted model, and never while paused. The key is never sent to pages or
+  shown in the side panel or debug reports.
 - **Nothing is deleted from the page.** Zapping hides blocks with a style and
   never removes, rewrites, or reorders nodes, so **Before** and **Show** always
   give back the page as published.
@@ -40,4 +46,6 @@ A way to break any of them is a security problem worth reporting.
 - The local model server itself (for example, llama-server) and anything else
   listening on loopback. LensZap trusts whatever answers on the endpoint you
   configure.
+- What a hosted provider you chose does with the text it receives. That is
+  governed by its terms.
 - A page hiding or showing its own content. LensZap only decides what it hides.

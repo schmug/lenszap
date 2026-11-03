@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LensZap (built on LensPub; not a LensPub engine)",
-  "version": "0.2.0",
-  "description": "Hides page blocks that don't match your LensPub lens. Uses your lens, but unlike a LensPub engine it hides content. Runs locally; every zap is listed and restorable.",
+  "version": "0.3.0",
+  "description": "Hides page blocks that don't match your LensPub lens. Uses your lens, but unlike a LensPub engine it hides content. Local model by default; every zap is listed and restorable.",
   "permissions": [
     "storage",
     "sidePanel"
@@ -10,6 +10,12 @@
   "host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "https://api.cloudflare.com/*",
+    "https://api.typesafe.ai/*",
+    "https://openrouter.ai/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",

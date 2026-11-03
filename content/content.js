@@ -49,7 +49,10 @@
   const labels = new Map(); // id → 'keep' | 'zap', marked in training mode on this page
   let decisions = [];
   let decisionById = new Map();
-  let scorerId = state.settings.scorer === 'lexical' ? LEXICAL_SCORER_ID : 'model (not yet run)';
+  // Which scorer runs here: 'lexical', 'model', 'hosted', or 'none' (a site
+  // the reader kept off the hosted model: nothing is scored or sent).
+  const scorerKind = () => state.scoring?.scorer ?? state.settings.scorer;
+  let scorerId = scorerKind() === 'lexical' ? LEXICAL_SCORER_ID : scorerKind() === 'none' ? 'none (kept off the hosted model)' : 'model (not yet run)';
   let modelError = null;
   const requestLog = []; // last model requests on this page: { n, ms, ok }, for the debug report
   let ledgerFailure = null;
@@ -341,7 +344,8 @@
     for (const id of ids) if (adSlots.has(id)) scores.set(id, adSlotScore(id, priorities()));
     ids = ids.filter((id) => !adSlots.has(id));
     if (ids.length === 0) return;
-    if (state.settings.scorer === 'lexical') {
+    if (scorerKind() === 'none') return; // nothing from this site goes to the hosted model
+    if (scorerKind() === 'lexical') {
       scorerId = LEXICAL_SCORER_ID;
       for (const s of scoreLexical(ids.map((id) => ({ id, text: blocks.get(id).text })), topics())) scores.set(s.id, s);
       return;
@@ -374,7 +378,7 @@
 
   function pump() {
     const gen = generation;
-    const m = state.settings.model;
+    const m = state.scoring ?? state.settings.model;
     const limit = Math.min(8, Math.max(1, Number(m.concurrency) || 4));
     // A decision model answers one block per request; a chat model takes a few.
     const per = m.api === 'systemone' ? 1 : 6;
@@ -606,9 +610,10 @@
       generated: new Date().toISOString(),
       scorer: scorerId,
       settings: {
-        scorer: state.settings.scorer,
+        scorer: scorerKind(),
         threshold: threshold(),
-        model: state.settings.scorer === 'model' ? { ...state.settings.model } : undefined
+        model: state.settings.scorer === 'model' ? { ...state.settings.model } : undefined,
+        hosted: state.settings.scorer === 'hosted' ? { provider: state.settings.hosted?.provider, model: state.scoring?.id } : undefined
       },
       site: { rule: rule?.name ?? null, paused: paused() },
       lens: { id: state.lens.id, version: state.lens.metadata?.lensVersion, priorities: priorities() },
@@ -918,7 +923,8 @@
     if (area !== 'local' || !(changes.lens || changes.settings || changes.draftWeights || changes.sites)) return;
     const key = () => {
       const m = state.settings.model;
-      return JSON.stringify([topics(), state.settings.scorer, m.api, m.endpoint, m.model]);
+      const hs = state.settings.hosted ?? {};
+      return JSON.stringify([topics(), scorerKind(), m.api, m.endpoint, m.model, state.scoring?.id, hs.accountId, hs.endpoint]);
     };
     const before = key();
     const wasPaused = paused();

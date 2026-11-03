@@ -4,7 +4,9 @@
 // Run:  npm test   (or: node test/repo-checks.mjs)
 //
 // - manifest.json and package.json carry the same version;
-// - the manifest asks for no host access beyond loopback (the "local only" rule);
+// - the manifest asks for no host access beyond loopback up front (local by
+//   default); hosted providers are optional hosts, asked for only when the
+//   reader sets one up with their own key;
 // - every code file carries an SPDX-License-Identifier header.
 
 import assert from 'node:assert/strict';
@@ -39,7 +41,14 @@ test('manifest host permissions are loopback only', () => {
   for (const host of manifest.host_permissions ?? []) {
     assert.ok(allowed.has(host), `host permission ${host} is not loopback`);
   }
-  assert.equal(manifest.optional_host_permissions, undefined, 'no optional host permissions');
+});
+
+test('optional host permissions are the hosted providers only, https only', () => {
+  // Each is requested at runtime from the hosted-model Save button (core/hosted.js).
+  // https://*/* covers a custom OpenAI-compatible endpoint; only that one origin is asked for.
+  const expected = ['https://api.cloudflare.com/*', 'https://api.typesafe.ai/*', 'https://openrouter.ai/*', 'https://*/*'];
+  assert.deepEqual(manifest.optional_host_permissions ?? [], expected, 'change core/hosted.js, this list, and SECURITY.md together');
+  assert.ok(!(manifest.permissions ?? []).includes('<all_urls>'));
 });
 
 // Code files only; upstream/ holds verbatim LensPub copies, eval/data/ holds captures.

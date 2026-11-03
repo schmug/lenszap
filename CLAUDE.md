@@ -54,8 +54,14 @@ No build step and no runtime dependencies: load the directory unpacked.
 - **Ad slots** (core/segment.js `adSlotScore`) are judged by structure, not
   text, and are zapped only when the lens has a negative interest about ads;
   otherwise they are unscored and never zapped.
-- **Local only.** The model endpoint must be loopback (`isLoopbackEndpoint`).
-  The extension makes no other network requests.
+- **Local by default.** A local model endpoint must be loopback
+  (`isLoopbackEndpoint`). The one exception is the opt-in hosted scorer,
+  bring your own key (`core/hosted.js`, settings `scorer: 'hosted'`): https
+  only, its host is an `optional_host_permissions` entry requested from the
+  Save click, never used on a site with `sites[host].noHosted` (that site is
+  scored by nothing) or while paused. The key lives in `hostedKeys`, apart
+  from settings, and never reaches pages, the side panel, or debug reports.
+  No other network requests. Local stays the default scorer.
 - **Lenses stay history-free.** Nothing about pages read goes into a lens.
   Drafts, per-site settings, and training marks are local Adaptation State.
   Training marks hold scores and a label only: no text, no URL.

@@ -15,6 +15,7 @@ import { isLoopbackEndpoint } from '../core/model-scorer.js';
 import { suggest, MIN_EXAMPLES } from '../core/train.js';
 import { lensChanges, validateLens, bumpVersion, withToolFields } from '../core/lens-edit.js';
 import { pauseScope, pauseLabel } from '../core/pause.js';
+import { HOSTED_PROVIDERS, hostedOrigin, hostedMissing, originPattern } from '../core/hosted.js';
 
 const $ = (id) => document.getElementById(id);
 const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
@@ -81,7 +82,8 @@ async function retarget() {
 }
 
 async function reloadState() {
-  state = await send('get-state', { host: page?.host ?? '' });
+  const [st, keys] = await Promise.all([send('get-state', { host: page?.host ?? '' }), send('hosted-keys')]);
+  state = { ...st, hostedKeys: keys?.saved ?? {} };
 }
 
 if (!pinnedTab) {
@@ -583,7 +585,11 @@ function renderSettings(message) {
     r.checked = st.scorer === value;
     r.addEventListener('change', async () => {
       state.settings = (await send('set-settings', { patch: { scorer: value } })).settings;
-      renderSettings(value === 'model' ? 'Using a model on this machine. Check the connection below.' : 'Using the word-only scorer.');
+      renderSettings({
+        model: 'Using a model on this machine. Check the connection below.',
+        hosted: 'Using a hosted model. Until it is set up below, nothing is scored.',
+        lexical: 'Using the word-only scorer.'
+      }[value]);
     });
     return h('label', { class: 'check' }, r, ` ${label}`);
   };
@@ -629,6 +635,100 @@ function renderSettings(message) {
     say(`${r.scorer} answered in ${r.ms} ms. A ransomware story scored ${fmt(a)} for “school cybersecurity”; a football story scored ${fmt(b)}.`);
   };
 
+  // --- Hosted model, bring your own key (core/hosted.js) ---
+  const hs = st.hosted ?? {};
+  const provider = h('select', {}, Object.entries(HOSTED_PROVIDERS).map(([v, p]) => h('option', { value: v, text: p.label })));
+  provider.value = HOSTED_PROVIDERS[hs.provider] ? hs.provider : 'workers-ai';
+  const prov = () => HOSTED_PROVIDERS[provider.value];
+  const accountId = h('input', { type: 'text', value: hs.accountId ?? '', placeholder: 'Cloudflare account ID', autocomplete: 'off' });
+  const hostedEndpoint = h('input', { type: 'url', value: hs.endpoint ?? '', placeholder: 'https://api.example.com/v1' });
+  const hostedModel = h('input', { type: 'text', value: hs.model ?? '', autocomplete: 'off', list: 'lenszap-hosted-models' });
+  const modelList = h('datalist', { id: 'lenszap-hosted-models' });
+  const keyBox = h('input', { type: 'password', value: '', autocomplete: 'off' });
+  const hostedConcurrency = h('input', { type: 'number', min: '1', max: '8', step: '1', value: String(hs.concurrency ?? 4) });
+  const hostedNote = h('p', { class: 'note' });
+  const accountField = h('label', { class: 'field' }, 'Account ID', accountId);
+  const endpointField = h('label', { class: 'field' }, 'Base URL (https)', hostedEndpoint);
+  const keyLabel = h('span', {});
+  const syncProvider = () => {
+    const p = prov();
+    accountField.style.display = p.needs.includes('accountId') ? '' : 'none';
+    endpointField.style.display = p.needs.includes('endpoint') ? '' : 'none';
+    modelList.replaceChildren(...p.models.map((m) => h('option', { value: m })));
+    hostedModel.placeholder = p.defaultModel ? `${p.defaultModel} (default)` : p.api === 'openai' ? 'model name, required' : '';
+    keyLabel.textContent = p.keyName;
+    keyBox.placeholder = state.hostedKeys?.[provider.value] ? 'saved (type to replace)' : 'paste your key';
+    hostedNote.textContent = p.note;
+  };
+  provider.addEventListener('change', () => { status.replaceChildren(); syncProvider(); });
+  syncProvider();
+
+  const saveHosted = async () => {
+    const next = {
+      provider: provider.value,
+      accountId: accountId.value.trim(),
+      endpoint: hostedEndpoint.value.trim(),
+      model: hostedModel.value.trim(),
+      concurrency: Math.min(8, Math.max(1, Math.round(Number(hostedConcurrency.value)) || 4))
+    };
+    const key = keyBox.value.trim();
+    const hasKey = Boolean(key || state.hostedKeys?.[next.provider]);
+    const missing = hostedMissing(next, hasKey ? 'x' : '');
+    if (prov().needs.includes('endpoint') && next.endpoint && !originPattern(next.endpoint)) {
+      say('Refused: the base URL must start with https://.', 'error');
+      return false;
+    }
+    if (missing.length) {
+      say(`Still needed: ${missing.join(', ').replace('key', prov().keyName).replace('accountId', 'account ID').replace('endpoint', 'base URL')}.`, 'error');
+      return false;
+    }
+    // Ask for the provider's host only now, from this click; nothing is sent before.
+    const origin = hostedOrigin(next);
+    let granted = false;
+    try {
+      granted = await chrome.permissions.request({ origins: [origin] });
+    } catch (err) {
+      say(`Could not ask for access to ${origin}: ${err?.message ?? err}`, 'error');
+      return false;
+    }
+    if (!granted) {
+      say(`Not saved: LensZap needs access to ${origin.replace('/*', '')} to use this provider.`, 'error');
+      return false;
+    }
+    if (key) await send('set-hosted-key', { provider: next.provider, key });
+    keyBox.value = '';
+    state.settings = (await send('set-settings', { patch: { hosted: next } })).settings;
+    state.hostedKeys = (await send('hosted-keys')).saved ?? {};
+    syncProvider();
+    return true;
+  };
+  const forgetKey = async () => {
+    await send('set-hosted-key', { provider: provider.value, key: '' });
+    const origin = hostedOrigin({ ...st.hosted, provider: provider.value, endpoint: hostedEndpoint.value.trim() });
+    if (origin) await chrome.permissions.remove({ origins: [origin] }).catch(() => {});
+    state.hostedKeys = (await send('hosted-keys')).saved ?? {};
+    syncProvider();
+    say(`Key removed and access to ${origin ? origin.replace('/*', '') : 'the provider'} given back.`);
+  };
+  const testHosted = async () => {
+    if (!(await saveHosted())) return;
+    say('Saved. Testing…');
+    const r = await send('test-model');
+    if (r.error) {
+      say(`Failed: ${r.error}`, 'error');
+      return;
+    }
+    const [a, b] = r.scores;
+    const fmt = (sc) => (sc.unscored ? 'no answer' : pct(sc.matches['school cybersecurity']));
+    say(`${r.scorer} answered in ${r.ms} ms. A ransomware story scored ${fmt(a)} for “school cybersecurity”; a football story scored ${fmt(b)}.`);
+  };
+  const noHosted = state.site.noHosted === true;
+  const setNoHosted = async (on) => {
+    if (!host) return;
+    state.site = (await send('set-site', { host, patch: { noHosted: on ? true : null } })).site;
+    renderSettings(on ? `Nothing from ${host} goes to the hosted model. This site is not scored.` : `${host} is scored by the hosted model again.`);
+  };
+
   const textBox = h('input', { type: 'checkbox' });
   const includeText = h('label', { class: 'check' }, textBox, ' Include page text and address (for pages you are happy to share)');
   const debugStatus = h('div', { class: 'status', role: 'status' });
@@ -669,6 +769,14 @@ function renderSettings(message) {
       on: { click: () => setPausedHere(!paused) }
     })),
     pausedAll && !paused && host ? h('p', { class: 'note', text: 'This site is paused by the browser-wide pause. Pause it here too to keep it paused after you resume everywhere.' }) : null,
+    st.scorer === 'hosted' && host ? h('div', { class: 'actions' }, h('button', {
+      'aria-pressed': String(noHosted),
+      text: noHosted ? 'Allow the hosted model here' : 'Keep this site off the hosted model',
+      on: { click: () => setNoHosted(!noHosted) }
+    })) : null,
+    st.scorer === 'hosted' && host ? h('p', { class: 'note', text: noHosted
+      ? 'Nothing from this site is sent, so it is not scored. Ads are still found by their layout.'
+      : 'Blocks of text on this site are sent to the hosted model. Use this for banking, email, or anything private.' }) : null,
     page ? h('dl', { class: 'kv' },
       h('dt', { text: 'Scorer' }), h('dd', { text: page.scorer }),
       h('dt', { text: 'Threshold' }), h('dd', { text: `${pct(threshold())}${state.site.threshold !== undefined ? ' (this site)' : ''}` }),
@@ -693,7 +801,8 @@ function renderSettings(message) {
     h('h3', { text: 'Scorer' }),
     h('fieldset', {},
       scorer('lexical', 'Words only (no model; zaps too much on real pages)'),
-      scorer('model', 'A model running on this machine')),
+      scorer('model', 'A model running on this machine'),
+      scorer('hosted', 'A hosted model with my own key (sends page text to that provider)')),
     st.scorer === 'model' ? h('div', {},
       h('label', { class: 'field' }, 'API', api),
       h('label', { class: 'field' }, 'Endpoint', endpoint),
@@ -703,6 +812,20 @@ function renderSettings(message) {
       h('div', { class: 'actions' },
         h('button', { text: 'Save', on: { click: async () => { if (await saveModel()) say('Saved.'); } } }),
         h('button', { class: 'primary', text: 'Test connection', on: { click: test } })),
+      status) : null,
+    st.scorer === 'hosted' ? h('div', {},
+      h('p', { class: 'note warn', text: 'While this is on, the text of each block on the pages you open (up to 1,500 characters each) is sent to the provider you pick, with your key. Your interest topics go with them (not their weights). Nothing else is sent: no page addresses, no history. Pausing sends nothing. Your key stays in this browser and is never exported.' }),
+      h('label', { class: 'field' }, 'Provider', provider),
+      hostedNote,
+      accountField,
+      endpointField,
+      h('label', { class: 'field' }, 'Model', hostedModel, modelList),
+      h('label', { class: 'field' }, keyLabel, keyBox),
+      h('label', { class: 'field' }, 'Requests at once', hostedConcurrency),
+      h('div', { class: 'actions' },
+        h('button', { text: 'Save', on: { click: async () => { if (await saveHosted()) renderSettings('Saved.'); } } }),
+        h('button', { class: 'primary', text: 'Test connection', on: { click: testHosted } }),
+        state.hostedKeys?.[provider.value] ? h('button', { class: 'danger', text: 'Forget key', on: { click: forgetKey } }) : null),
       status) : null,
 
     h('h3', { text: 'Troubleshooting' }),

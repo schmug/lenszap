@@ -17,9 +17,11 @@
 //   - "openai": the OpenAI-compatible /v1/chat/completions served by
 //     llama-server (chat models), LM Studio, vLLM, and Ollama.
 //
-// Local only: endpoints must be loopback addresses (isLoopbackEndpoint). A
-// hosted model would see every block of every page the reader opens, which is
-// the surveillance ADR-0005 exists to prevent.
+// Local by default: endpoints must be loopback addresses (isLoopbackEndpoint).
+// A hosted model sees every block of every page the reader opens, which is the
+// surveillance ADR-0005 exists to prevent. The one exception is a hosted
+// scorer the reader set up with their own key (core/hosted.js): its settings
+// carry `hosted: true` and a full https `url`, and nothing else is accepted.
 //
 // This module only builds requests and parses responses; the fetch happens in
 // background/service-worker.js and bench/bench.mjs. Pure and DOM-free.
@@ -30,7 +32,29 @@ export const MAX_BLOCK_CHARS = 600;
 export const BATCH_SIZE = 12;
 
 export function modelScorerId(settings) {
-  return `model:${settings.model || 'default'}@${settings.api}`;
+  return settings.scorerId ?? `model:${settings.model || 'default'}@${settings.api}`;
+}
+
+/**
+ * Where a request goes: the loopback endpoint plus `path`, or, for a hosted
+ * scorer the reader set up (core/hosted.js), its own https URL and headers.
+ * Anything else throws.
+ */
+function requestTarget(settings, path) {
+  if (settings.hosted === true) {
+    let u;
+    try {
+      u = new URL(settings.url);
+    } catch {
+      u = null;
+    }
+    if (!u || u.protocol !== 'https:') throw new Error('A hosted model must be reached over https.');
+    return { url: u.href, headers: { 'content-type': 'application/json', ...(settings.headers ?? {}) } };
+  }
+  if (!isLoopbackEndpoint(settings.endpoint)) {
+    throw new Error('The model endpoint must be on this machine (localhost or 127.0.0.1).');
+  }
+  return { url: settings.endpoint.replace(/\/+$/, '') + path, headers: { 'content-type': 'application/json' } };
 }
 
 /** True only for http(s) URLs on localhost, 127.0.0.0/8, or [::1]. */
@@ -93,10 +117,7 @@ function userMessage(blocks, topics) {
  * @returns {{url: string, init: RequestInit}}
  */
 export function buildRequest(settings, blocks, topics) {
-  if (!isLoopbackEndpoint(settings.endpoint)) {
-    throw new Error('The model endpoint must be on this machine (localhost or 127.0.0.1).');
-  }
-  const base = settings.endpoint.replace(/\/+$/, '');
+  const target = requestTarget(settings, settings.api === 'ollama' ? '/api/chat' : '/v1/chat/completions');
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userMessage(blocks, topics) }
@@ -111,11 +132,7 @@ export function buildRequest(settings, blocks, topics) {
           temperature: 0,
           response_format: { type: 'json_schema', json_schema: { name: 'zap_scores', schema } }
         };
-  const path = settings.api === 'ollama' ? '/api/chat' : '/v1/chat/completions';
-  return {
-    url: base + path,
-    init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
-  };
+  return { url: target.url, init: { method: 'POST', headers: target.headers, body: JSON.stringify(body) } };
 }
 
 /**
@@ -174,9 +191,7 @@ const topicKey = (i) => `t${i}`;
  * @param {string[]} topics
  */
 export function buildSystemOneRequest(settings, block, topics) {
-  if (!isLoopbackEndpoint(settings.endpoint)) {
-    throw new Error('The model endpoint must be on this machine (localhost or 127.0.0.1).');
-  }
+  const target = requestTarget(settings, '/v1/systemone');
   const questions = {};
   topics.forEach((topic, i) => {
     questions[topicKey(i)] = { type: 'noul', instructions: `Is this passage about ${topic}?` };
@@ -191,10 +206,7 @@ export function buildSystemOneRequest(settings, block, topics) {
     questions
   };
   if (settings.model) body.model = settings.model;
-  return {
-    url: `${settings.endpoint.replace(/\/+$/, '')}/v1/systemone`,
-    init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
-  };
+  return { url: target.url, init: { method: 'POST', headers: target.headers, body: JSON.stringify(body) } };
 }
 
 /**
@@ -203,7 +215,8 @@ export function buildSystemOneRequest(settings, block, topics) {
  * `unscored` and is never zapped.
  */
 export function parseSystemOneResponse(json, block, topics) {
-  const answers = json?.answers ?? {};
+  // Workers AI wraps the answer as {success, result: {answers}}.
+  const answers = json?.answers ?? json?.result?.answers ?? {};
   const matches = {};
   let answered = 0;
   topics.forEach((topic, i) => {
