@@ -57,8 +57,31 @@ Manifest Consumer and a Manifest Producer.
   CSS/HTML comment equivalent). The tests check this.
 - Two-space indentation, LF line endings; `.editorconfig` sets this up for most
   editors.
-- Keep `version` in `manifest.json` and `package.json` the same. The tests
-  check this too.
+
+## Versions
+
+The extension's version is MAJOR.MINOR.PATCH, kept the same in
+`manifest.json` (what Chrome shows), `package.json`, and `package-lock.json`.
+A pull request that changes anything the browser loads (`manifest.json`,
+`background/`, `content/`, `core/`, `sidepanel/`, `lenses/`) must raise it; CI
+checks this. Tooling-only changes (`eval/`, `test/`, `scripts/`, docs) don't
+need a bump.
+
+```
+npm version patch   # a fix: nothing new to learn
+npm version minor   # a new feature or setting
+npm version major   # breaking: saved settings, lenses, or storage no longer carry over
+```
+
+`npm version` updates `package.json` and the lock, and copies the version into
+`manifest.json`; it makes no commit or tag (see `.npmrc`). Then add a
+`## X.Y.Z` entry at the top of [CHANGELOG.md](CHANGELOG.md) saying what a
+user will notice, and commit it with your change. Below 1.0, a breaking
+change may go in a MINOR bump if the changelog says so.
+
+If two open PRs both bump to the same number, the second to merge takes the
+next one up when it resolves the conflict. `npm run check-version` runs the CI
+check locally against `origin/main`.
 
 ## Pull requests
 

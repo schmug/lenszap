@@ -6,6 +6,7 @@
 
 - [ ] `npm test` passes
 - [ ] `npm run browser-check` passes (if `content/`, `sidepanel/`, or `background/` changed)
+- [ ] Version bumped with `npm version patch|minor|major` and CHANGELOG.md updated (if anything the browser loads changed)
 
 ## Rules
 
