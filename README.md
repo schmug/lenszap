@@ -68,7 +68,7 @@ Decision models run in llama.cpp's `llama-server`, which serves them at `/v1/sys
    llama-server -hf ggml-org/Kev-4B-GGUF --port 8080 --parallel 4
    ```
 
-   If long passages fail with a "too large to process" error, add `-ub 2048`.
+   If long passages fail with a "too large to process" error, add `-ub 2048`. The vllm-d3 models need `-ub 2048 -b 2048` from the start: they read the whole passage at once, and with the default batch size llama-server crashes on the first long block.
 
    **Clef-flash isn't in released llama.cpp yet.** As of 2026-11-01 its support is an unmerged draft ([llama.cpp PR #29831](https://github.com/ggml-org/llama.cpp/pull/29831)), so release builds fail with `unknown model architecture: 'clef'`. To try it now, build that PR yourself. The PR handles one sequence per batch, so use `--parallel 1` and `--concurrency 1`:
 

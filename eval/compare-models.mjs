@@ -19,7 +19,7 @@
 //          --llama-server PATH (default: llama-server on your PATH)
 //          --load-timeout SECONDS (first run downloads the model; default 1800)
 //          --fresh (ask each model again instead of using its cached scores)
-//          --server-args "…" (extra llama-server arguments, e.g. "-ub 2048")
+//          --server-args "…" (extra llama-server arguments; default "-ub 2048 -b 2048")
 //
 // Every model's scores are cached under its own name (eval/run.mjs --tag), so a
 // re-run only asks models about blocks they haven't seen. Memory is the peak
@@ -58,7 +58,10 @@ const parallel = Number(args.parallel ?? 4);
 const at = Number(args.at ?? 0.65);
 const server = typeof args['llama-server'] === 'string' ? args['llama-server'] : 'llama-server';
 const loadTimeoutMs = Number(args['load-timeout'] ?? 1800) * 1000;
-const extraServerArgs = typeof args['server-args'] === 'string' ? args['server-args'].split(/\s+/).filter(Boolean) : [];
+// Non-causal decision models (vllm-d3) need the whole prompt in one batch: llama-server's
+// default 512-token batch aborts on a long block (GGML_ASSERT n_ubatch >= n_tokens).
+const DEFAULT_SERVER_ARGS = ['-ub', '2048', '-b', '2048'];
+const extraServerArgs = typeof args['server-args'] === 'string' ? args['server-args'].split(/\s+/).filter(Boolean) : DEFAULT_SERVER_ARGS;
 const endpoint = `http://127.0.0.1:${port}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
