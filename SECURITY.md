@@ -35,9 +35,10 @@ A way to break any of them is a security problem worth reporting.
   give back the page as published.
 - **A held page always shows.** With Settings → "Hold the first screen until
   it is scored" on, pages start transparent until their first screen is
-  judged. The stylesheet that holds them ends the hold by itself after 3
-  seconds, with no script needed, so a silent model or a broken content script
-  never leaves a page blank. It is never applied on a paused site or while
+  judged, and blocks still being judged after 3 seconds stay invisible in
+  place. The stylesheet ends both holds by itself (8 seconds for the page, 10
+  for a block), with no script needed, so a silent model or a broken content
+  script never leaves a page blank. It is never applied on a paused site or while
   paused everywhere. The `scripting` permission is used only to register that
   one stylesheet.
 - **Every hidden block is accounted for.** The ledger lists every hidden block,

@@ -680,7 +680,7 @@ const holdPage = (tag) => '<!doctype html><meta charset="utf-8"><title>Hold page
   '  if (m.attributeName === "data-lpz-shown") __hold.shownAt = performance.now();' +
   '} }).observe(document.documentElement, { attributes: true, subtree: true });' +
   '</script><body>' +
-  Array.from({ length: 6 }, (_, i) => `<p>Paragraph ${i + 1} of the ${tag} page, about the harbour ferry and its winter crossings, item ${i + 1}.</p>`).join('') +
+  Array.from({ length: tag === 'busy' ? 16 : 6 }, (_, i) => `<p>Paragraph ${i + 1} of the ${tag} page, about the harbour ferry and its winter crossings, item ${i + 1}.</p>`).join('') +
   '</body>';
 const holdServer = createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -710,13 +710,31 @@ assert.equal(seen.zapping, 0, 'hold: no block is zapped in sight');
 assert.ok(seen.shownAt < 3000, `hold: shown as soon as the first screen is scored (${Math.round(seen.shownAt)} ms)`);
 assert.equal(await htmlOpacity(), '1', 'hold: shown');
 console.log(`hold: ${seen.zappedHeld} block(s) zapped before showing, shown at ${Math.round(seen.shownAt)} ms`);
-// A model that does not answer: the page shows at the 3 s ceiling anyway.
-modelDelay = 8000;
+// A busy first screen and a model like Kev-4B on a laptop (about 1 s a
+// block, 4 at once): more than the hold allows. The page shows at the limit;
+// the blocks still being judged stay invisible in place, and none is zapped
+// in sight.
+modelDelay = 1100;
+await worker.evaluate(async () => {
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({ settings: { ...settings, model: { ...settings.model, concurrency: 4 } } });
+});
+await page.goto(holdUrl('127.0.0.1', 'busy'));
+await page.waitForFunction(() => document.documentElement.hasAttribute('data-lpz-shown'), null, { timeout: 6000 });
+const pendingAtShow = await page.evaluate(() => [...document.querySelectorAll('[data-lpz-pending]')].map((el) => getComputedStyle(el).opacity));
+assert.ok(pendingAtShow.length > 0, 'hold: blocks still being judged when the page shows are marked pending');
+assert.ok(pendingAtShow.every((o) => o === '0'), 'hold: pending blocks are invisible');
+await page.waitForFunction(() => !document.querySelector('[data-lpz-pending]'), null, { timeout: 10000 });
+seen = await page.evaluate(() => window.__hold);
+assert.equal(seen.zapping, 0, `hold: nothing on a busy first screen is zapped in sight (${seen.zapping})`);
+console.log(`hold, busy first screen: shown at ${Math.round(seen.shownAt)} ms with ${pendingAtShow.length} block(s) pending, ${seen.zappedHeld} zapped before showing, 0 in sight`);
+// A model that does not answer: the page shows at the limit anyway.
+modelDelay = 20000;
 await page.goto(holdUrl('127.0.0.1', 'slow'));
 await page.waitForTimeout(1500);
 assert.equal(await htmlOpacity(), '0', 'hold: still held at 1.5 s while the model is slow');
-await page.waitForTimeout(1800);
-assert.equal(await htmlOpacity(), '1', 'hold: shown by 3.3 s though the model never answered');
+await page.waitForFunction(() => document.documentElement.hasAttribute('data-lpz-shown'), null, { timeout: 4000 });
+assert.equal(await htmlOpacity(), '1', 'hold: shown though the model never answered');
 modelDelay = 40;
 // A paused site is never held, or touched at all.
 await page.goto('about:blank');

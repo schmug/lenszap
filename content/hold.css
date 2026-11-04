@@ -4,14 +4,22 @@
  * document_start only while that setting is on (core/hold.js), never on a
  * paused site or while paused everywhere.
  *
- * The page stays transparent until the content script marks it shown. The
- * animation is the hard timeout: after 3 s (core/hold.js HOLD_MS) it ends and
- * the page shows whether or not any script ran. Every way this can fail (a
- * page style that overrides it, a dead model, a crashed script) fails open.
+ * The page stays transparent until the content script marks it shown, at
+ * most 3 s after that script starts (core/hold.js HOLD_MS). First-screen
+ * blocks the model has not judged by then stay transparent in place, keeping
+ * their space, until judged. Each animation is a hard timeout that needs no
+ * script: the page shows 8 s after navigation (HOLD_MAX_MS) and a pending
+ * block 10 s after it was marked (PENDING_MAX_MS), whatever else happens.
+ * Every way this can fail (a page style that overrides it, a dead model, a
+ * crashed script) fails open.
  */
 
 html:not([data-lpz-shown]) {
-  animation: lpz-hold 3s linear !important;
+  animation: lpz-hold 8s linear !important;
+}
+
+[data-lpz-pending] {
+  animation: lpz-hold 10s linear !important;
 }
 
 @keyframes lpz-hold {

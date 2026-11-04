@@ -4,17 +4,22 @@
 // With it on, the extension registers content/hold.css at document_start,
 // which keeps the page transparent so zapped blocks never appear and then
 // vanish. The content script lifts the hold as soon as every block on the
-// first screen is scored (or the model fails, or the page is paused). The
-// stylesheet also lifts itself after HOLD_MS with no script at all, so a slow
-// or silent model, or a crashed content script, never leaves a page blank.
+// first screen is scored (or the model fails, or the page is paused), and at
+// most HOLD_MS after it starts; first-screen blocks still being scored then
+// stay invisible in place until judged. The stylesheet also lifts both by
+// itself (HOLD_MAX_MS, PENDING_MAX_MS) with no script at all, so a slow or
+// silent model, or a crashed content script, never leaves a page blank.
 // Only the first screen is waited for: blocks further down are scored and
 // zapped as usual, out of sight.
 // Pure and DOM-free.
 
 import { effectiveScorer } from './hosted.js';
 
-/** The hard ceiling on a hold, in ms from navigation start. Keep in step with content/hold.css. */
+/** How long the content script holds the page, in ms from when it starts. */
 export const HOLD_MS = 3000;
+/** The stylesheet's own ceilings, needing no script. Keep in step with content/hold.css. */
+export const HOLD_MAX_MS = 8000; // the page, from navigation start
+export const PENDING_MAX_MS = 10000; // a first-screen block still being scored, from when the page showed
 
 export const HOLD_SCRIPT_ID = 'lpz-hold';
 

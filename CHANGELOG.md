@@ -7,6 +7,15 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.5.1
+
+- **Hold the first screen** now works with a local model and on heavy pages.
+  The 3-second limit counts from when LensZap starts on the page, not from
+  navigation (a slow page used it all up before scoring began). First-screen
+  blocks still being judged at the limit stay invisible in place until judged,
+  instead of appearing and then zapping. The stylesheet's own fail-open
+  ceilings are now 8 s for the page and 10 s for a block.
+
 ## 0.5.0
 
 - **Hold the first screen until it is scored** (Settings → Display, off by

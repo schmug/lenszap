@@ -29,8 +29,11 @@
 
   // Settings → "Hold the first screen until it is scored": content/hold.css
   // keeps the page transparent from document_start. It is lifted here once
-  // the first screen is scored, on any failure or pause, and by the
-  // stylesheet itself after 3 s. Checked before anything else can fail.
+  // the first screen is scored, on any failure or pause, or HOLD_MS after this
+  // script starts (the page may have spent seconds loading before it could).
+  // First-screen blocks still being scored then stay invisible in place
+  // (data-lpz-pending) until judged. The stylesheet lifts both by itself if no
+  // script does. Checked before anything else can fail.
   const holdOn = () => {
     const el = document.documentElement;
     return !!el && !el.hasAttribute('data-lpz-shown') &&
@@ -39,11 +42,16 @@
   let holding = holdOn();
   let holdTimer = null;
   const firstScreen = new Set(); // ids of blocks on the first screen, while holding
-  function reveal() {
+  const pending = new Set(); // first-screen ids still invisible after the page showed
+  function reveal(stillWaiting = []) {
     if (!holding) return;
     holding = false;
     clearTimeout(holdTimer);
     firstScreen.clear();
+    for (const id of stillWaiting) {
+      pending.add(id);
+      setAttr(blocks.get(id), 'data-lpz-pending', '');
+    }
     document.documentElement.setAttribute('data-lpz-shown', '');
   }
 
@@ -60,7 +68,9 @@
   const host = location.hostname;
   const rule = siteRule(host);
 
-  if (holding) holdTimer = setTimeout(reveal, Math.max(0, HOLD_MS - performance.now()));
+  // Counted from here, not from navigation: on a heavy page most of the
+  // budget would be gone before there was anything to score.
+  if (holding) holdTimer = setTimeout(() => reveal([...firstScreen].filter(waiting)), HOLD_MS);
 
   let state = await send('get-state', { host }).catch(() => null);
   if (!state || state.error) return reveal();
@@ -510,7 +520,7 @@
     if (on === isHidden(b)) return;
     if (on) {
       setAttr(b, 'data-lpz-unzap', null);
-      if (!animating() || !b.els.some(inView)) {
+      if (!animating() || !b.els.some(inView) || b.els[0].hasAttribute('data-lpz-pending')) {
         setAttr(b, 'data-lpz-zapped', '');
         return;
       }
@@ -566,11 +576,20 @@
   }
 
   // Lift the hold once no block on the first screen waits for a score. A
-  // failed model, a ledger mismatch, or a pause lifts it at once.
+  // failed model, a ledger mismatch, or a pause lifts it at once. A pending
+  // block shows once judged (a zapped one was zapped while still invisible).
+  function waiting(id) {
+    return blocks.has(id) && (active.has(id) || queue.includes(id));
+  }
   function maybeReveal() {
+    const giveUp = paused() || modelError || ledgerFailure || ui.before;
+    for (const id of pending) {
+      if (!giveUp && waiting(id)) continue;
+      pending.delete(id);
+      if (blocks.has(id)) setAttr(blocks.get(id), 'data-lpz-pending', null);
+    }
     if (!holding) return;
-    if (paused() || modelError || ledgerFailure || ui.before ||
-        holdDone(firstScreen, (id) => blocks.has(id) && (active.has(id) || queue.includes(id)))) reveal();
+    if (giveUp || holdDone(firstScreen, waiting)) reveal();
   }
 
   // --- Reporting to the side panel ------------------------------------------------
