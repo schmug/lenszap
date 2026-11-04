@@ -49,10 +49,12 @@ No build step and no runtime dependencies: load the directory unpacked.
 - **Never zapped:** page chrome and controls, corrections and primary sources,
   and any block the scorer returned nothing for.
 - **The first-screen hold fails open.** `settings.holdFirstScreen` registers
-  `content/hold.css` (core/hold.js) at document_start; its CSS animation ends
-  the hold after 3 s with no script, and the content script lifts it sooner on
-  scores, failure, or pause. Never registered for paused sites or while paused
-  everywhere. Keep `HOLD_MS` and the stylesheet's duration in step (tested).
+  `content/hold.css` (core/hold.js) at document_start. The content script
+  lifts it on scores, failure, or pause, and at most `HOLD_MS` after it
+  starts, marking first-screen blocks still being scored `data-lpz-pending`
+  (invisible in place) until judged. The stylesheet's animations end both with
+  no script (`HOLD_MAX_MS`, `PENDING_MAX_MS`; tested to match). Never
+  registered for paused sites or while paused everywhere.
 - **Unmatched blocks** (matching none of the positive interests) are kept by
   default; `settings.hideUnmatched` (Settings → "Also hide blocks that match
   none of my interests") hides them too. `decide()` and `offLensConfidence()`
