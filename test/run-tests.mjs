@@ -882,5 +882,47 @@ await test('eval: hosted targets need their keys and keep the core scorer loopba
   assert.equal(score.matches.gossip, 0.1);
 });
 
+await test('eval browser scorer: System One questions become NLI hypotheses', async () => {
+  const { questionToHypothesis, readSystemOneBody, systemOneAnswers } = await import('../eval/browser-scorer/shared.js');
+  assert.equal(questionToHypothesis('Is this passage about cybersecurity?'), 'This passage is about cybersecurity.');
+  assert.equal(
+    questionToHypothesis('Is this passage a correction, clarification, or retraction, or does it cite a primary source such as a study?'),
+    'This passage is a correction, clarification, or retraction, or it cites a primary source such as a study.'
+  );
+  assert.equal(questionToHypothesis('Plain statement'), 'Plain statement.');
+  // The request core/model-scorer.js builds parses back into passage and hypotheses.
+  const { init } = buildSystemOneRequest({ endpoint: 'http://127.0.0.1:8282' }, { id: 'b', text: 'Ransomware hit the district.' }, ['cybersecurity', 'gossip']);
+  const r = readSystemOneBody(JSON.parse(init.body));
+  assert.equal(r.passage, 'Ransomware hit the district.');
+  assert.deepEqual(r.keys, ['t0', 't1', 'evidence']);
+  assert.equal(r.hypotheses[1], 'This passage is about gossip.');
+  assert.throws(() => readSystemOneBody({ state: 1 }), /state/);
+  // And the answer parses with the extension's own parser.
+  const json = systemOneAnswers(r.keys, [0.9, 1.4, NaN]);
+  const parsed = parseSystemOneResponse(json, { id: 'b' }, ['cybersecurity', 'gossip']);
+  assert.equal(parsed.matches.cybersecurity, 0.9);
+  assert.equal(parsed.matches.gossip, 1, 'clamped');
+  assert.equal(parsed.evidence, false, 'a missing answer is not evidence');
+});
+
+await test('eval browser scorer: cosine rescale, model paths, and the local-only guard', async () => {
+  const { rescaleCosine, modelFilePath, isLocalRequest, apiForKind } = await import('../eval/browser-scorer/shared.js');
+  assert.ok(Math.abs(rescaleCosine(0.4, 0.2, 0.6) - 0.5) < 1e-9);
+  assert.equal(rescaleCosine(0.1, 0.2, 0.6), 0);
+  assert.equal(rescaleCosine(0.9, 0.2, 0.6), 1);
+  assert.equal(rescaleCosine(0.5, 0.6, 0.2), 0, 'a bad range scores nothing');
+  assert.equal(modelFilePath('/models/Xenova/nli-deberta-v3-xsmall/onnx/model_fp16.onnx'), 'Xenova/nli-deberta-v3-xsmall/onnx/model_fp16.onnx');
+  assert.equal(modelFilePath('/models/Qwen2.5-0.5B-MLC/resolve/main/params_shard_0.bin'), 'Qwen2.5-0.5B-MLC/params_shard_0.bin');
+  assert.equal(modelFilePath('/models/a/../../etc/passwd'), null);
+  assert.equal(modelFilePath('/models/a/%2e%2e/b'), null);
+  assert.equal(modelFilePath('/other/a'), null);
+  assert.equal(isLocalRequest('http://127.0.0.1:8282/models/x'), true);
+  assert.equal(isLocalRequest('blob:http://127.0.0.1:8282/abc'), true);
+  assert.equal(isLocalRequest('https://huggingface.co/x'), false);
+  assert.equal(isLocalRequest('https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/x.wasm'), false);
+  assert.equal(apiForKind('webllm'), 'openai');
+  assert.equal(apiForKind('nli'), 'systemone');
+});
+
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

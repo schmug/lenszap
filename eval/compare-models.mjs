@@ -20,10 +20,17 @@
 //          --load-timeout SECONDS (first run downloads the model; default 1800)
 //          --fresh (ask each model again instead of using its cached scores)
 //          --server-args "…" (extra llama-server arguments; default "-c 8192 -ub 2048 -b 2048")
+//          --browser LIST (comma-separated KIND:MODEL entries scored inside Chromium by
+//          eval/browser-scorer.mjs, e.g. nli:Xenova/nli-deberta-v3-xsmall,webllm:Qwen2.5-0.5B-Instruct-q4f16_1-MLC;
+//          download each once with npm run browser-scorer -- --kind KIND --model MODEL --download.
+//          With --browser and no --models, only the browser models run.)
+//          --browser-args "…" (extra eval/browser-scorer.mjs arguments, e.g. "--headed")
 //
 // Every model's scores are cached under its own name (eval/run.mjs --tag), so a
 // re-run only asks models about blocks they haven't seen. Memory is the peak
-// resident size of llama-server.
+// resident size of llama-server; for a browser model, of the scorer and all of
+// its Chromium processes (GPU memory on a Mac with unified memory shows up there
+// only in part, so read it as a floor).
 //
 // Downloads come from Hugging Face through llama-server's own -hf; model
 // requests stay on 127.0.0.1.
@@ -50,7 +57,15 @@ export const SHORTLIST = [
 const args = parseArgs(process.argv.slice(2));
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dataDir = args.data ?? join(root, 'eval/data');
-const models = typeof args.models === 'string' ? args.models.split(',').map((m) => m.trim()).filter(Boolean) : SHORTLIST;
+const list = (v) => (typeof v === 'string' ? v.split(',').map((m) => m.trim()).filter(Boolean) : []);
+// Read raw: its value starts with "--", which parseArgs would take for a flag.
+const rawAt = process.argv.indexOf('--browser-args');
+const browserArgs = rawAt > 0 && process.argv[rawAt + 1] !== undefined ? process.argv[rawAt + 1].split(/\s+/).filter(Boolean) : [];
+const browserModels = list(args.browser).map((spec) => {
+  const i = spec.indexOf(':');
+  return { kind: spec.slice(0, i), model: spec.slice(i + 1), name: `browser:${spec}${browserArgs.length ? ` ${browserArgs.join(' ')}` : ''}` };
+});
+const models = typeof args.models === 'string' ? list(args.models) : browserModels.length ? [] : SHORTLIST;
 const port = Number(args.port ?? 8182);
 const parallel = Number(args.parallel ?? 4);
 const at = Number(args.at ?? 0.65);
@@ -86,10 +101,34 @@ function rssMiB(pid) {
   }
 }
 
-/** Start llama-server for one model; resolve once /health answers 200. */
-async function startServer(model) {
-  const argv = ['-hf', model, '--host', '127.0.0.1', '--port', String(port), '--parallel', String(parallel), ...extraServerArgs];
-  const child = spawn(server, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+/** Resident size of a process and all its descendants in MiB, or null. */
+function treeRssMiB(pid) {
+  try {
+    const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,rss='], { encoding: 'utf8' })
+      .trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number));
+    const kids = new Map();
+    for (const [p, pp] of rows) kids.set(pp, [...(kids.get(pp) ?? []), p]);
+    const rss = new Map(rows.map(([p, , r]) => [p, r]));
+    let kb = 0;
+    const stack = [pid];
+    while (stack.length) {
+      const p = stack.pop();
+      kb += rss.get(p) ?? 0;
+      stack.push(...(kids.get(p) ?? []));
+    }
+    return kb / 1024;
+  } catch {
+    return null;
+  }
+}
+
+/** Start llama-server (or, for a browser model, eval/browser-scorer.mjs); resolve once /health answers 200. */
+async function startServer(model, browserModel = null) {
+  const argv = browserModel
+    ? [join(root, 'eval/browser-scorer.mjs'), '--kind', browserModel.kind, '--model', browserModel.model, '--port', String(port),
+      ...browserArgs]
+    : ['-hf', model, '--host', '127.0.0.1', '--port', String(port), '--parallel', String(parallel), ...extraServerArgs];
+  const child = spawn(browserModel ? process.execPath : server, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
   // Collect whole lines: a chunk can end mid-line.
   const log = [];
   const partial = { out: '', err: '' };
@@ -121,7 +160,7 @@ async function startServer(model) {
   }
   if (!exited) child.kill('SIGTERM');
   const tail = log.filter((l) => /error|unknown|failed|unsupported/i.test(l)).slice(-3).join(' | ') || log.slice(-3).join(' | ');
-  throw new Error(exited ? `llama-server exited (${JSON.stringify(exited)}): ${tail}` : `not ready after ${loadTimeoutMs / 1000} s: ${tail}`);
+  throw new Error(exited ? `${browserModel ? 'browser-scorer' : 'llama-server'} exited (${JSON.stringify(exited)}): ${tail}` : `not ready after ${loadTimeoutMs / 1000} s: ${tail}`);
 }
 
 async function stopServer(child) {
@@ -133,10 +172,10 @@ async function stopServer(child) {
 
 
 /** Run eval/run.mjs against the server; return its JSON result. */
-function runEval(model, extra) {
+function runEval(model, extra, { api = 'systemone', concurrency = parallel } = {}) {
   const argv = [
-    join(root, 'eval/run.mjs'), '--api', 'systemone', '--endpoint', endpoint, '--tag', model,
-    '--concurrency', String(parallel), '--at', String(at), '--data', dataDir, '--json', ...extra
+    join(root, 'eval/run.mjs'), '--api', api, '--endpoint', endpoint, '--tag', model,
+    '--concurrency', String(concurrency), '--at', String(at), '--data', dataDir, '--json', ...extra
   ];
   if (typeof args.lens === 'string') argv.push('--lens', args.lens);
   if (args.fresh) argv.push('--fresh');
@@ -160,21 +199,26 @@ if (await portBusy()) {
 }
 
 const results = [];
-for (const model of models) {
+const runs = [...models.map((model) => ({ model, browser: null })), ...browserModels.map((b) => ({ model: b.name, browser: b }))];
+for (const { model, browser } of runs) {
   console.error(`\n== ${model}`);
+  // A browser model runs one block at a time: the page queues calls anyway, so
+  // more in flight would only add waiting to each block's time.
+  const evalOpts = browser ? { api: browser.kind === 'webllm' ? 'openai' : 'systemone', concurrency: 1 } : {};
+  const rss = browser ? treeRssMiB : rssMiB;
   let srv;
   try {
-    srv = await startServer(model);
+    srv = await startServer(model, browser);
   } catch (err) {
     console.error(`  Skipped: ${err.message}`);
     results.push({ model, error: err.message });
     continue;
   }
-  let peak = rssMiB(srv.child.pid) ?? 0;
-  const sampler = setInterval(() => { peak = Math.max(peak, rssMiB(srv.child.pid) ?? 0); }, 1000);
+  let peak = rss(srv.child.pid) ?? 0;
+  const sampler = setInterval(() => { peak = Math.max(peak, rss(srv.child.pid) ?? 0); }, 1000);
   try {
-    const kept = await runEval(model, []);
-    const hidden = await runEval(model, ['--hide-unmatched']); // same scores, from the cache
+    const kept = await runEval(model, [], evalOpts);
+    const hidden = await runEval(model, ['--hide-unmatched'], evalOpts); // same scores, from the cache
     const run = kept.runs.at(-1);
     results.push({
       model,
@@ -200,7 +244,7 @@ for (const model of models) {
 
 const lines = [];
 const ok = results.filter((r) => !r.error);
-lines.push(`Model comparison, ${new Date().toISOString().slice(0, 10)}: ${ok[0]?.pages ?? '?'} pages, threshold ${pct(at)}, llama-server --parallel ${parallel}.`);
+lines.push(`Model comparison, ${new Date().toISOString().slice(0, 10)}: ${ok[0]?.pages ?? '?'} pages, threshold ${pct(at)}, llama-server --parallel ${parallel}${browserModels.length ? '; browser models one block at a time' : ''}.`);
 lines.push('');
 lines.push('Default mode (blocks matching none of your interests are kept):');
 lines.push('');

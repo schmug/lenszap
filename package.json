@@ -20,7 +20,8 @@
     "capture": "node eval/capture.mjs",
     "label": "node eval/label.mjs",
     "eval": "node eval/run.mjs",
-    "compare-models": "node eval/compare-models.mjs"
+    "compare-models": "node eval/compare-models.mjs",
+    "browser-scorer": "node eval/browser-scorer.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",
