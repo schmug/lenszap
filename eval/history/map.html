@@ -1,0 +1,192 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History map</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fff; --fg: #1b1b1f; --muted: #666; --border: #e2e2e8; --panel: rgba(250,250,252,.92);
+  --more: 46,125,50; --less: 198,40,40; --zero: 150,150,160;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #15151a; --fg: #e8e8ee; --muted: #9a9aa5; --border: #3a3a43; --panel: rgba(33,33,38,.92);
+    --more: 129,201,149; --less: 255,138,128; --zero: 120,120,132; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+canvas:active { cursor: grabbing; }
+.panel { position: fixed; left: 12px; right: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.panel input[type=range] { flex: 1 1 200px; }
+.top { position: fixed; left: 12px; top: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; max-width: min(420px, calc(100vw - 24px)); }
+.top h1 { font-size: 14px; margin: 0 0 4px; }
+.top p { margin: 0; color: var(--muted); }
+#tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-width: 360px; display: none; }
+#legend { display: flex; flex-wrap: wrap; gap: 4px 10px; max-height: 64px; overflow: auto; flex: 1 1 100%; }
+#legend span i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+button, select { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+a { color: inherit; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="top">
+  <h1>Your history, mapped</h1>
+  <p>Each dot is a page; nearby dots are about similar things. Size is visits; colour is your lens (green more, red less, grey not in it) or the group. Drag to turn, scroll to zoom. <a href="/">Back to the table</a></p>
+</div>
+<div id="tip"></div>
+<div class="panel">
+  <button id="play">▶ Play</button>
+  <label>Window <select id="win"><option value="7">1 week</option><option value="30" selected>30 days</option><option value="0">All</option></select></label>
+  <input type="range" id="day" aria-label="Day">
+  <span id="dayLabel"></span>
+  <label>Colour <select id="colorBy"><option value="lens">Lens</option><option value="group">Group</option></select></label>
+  <label><input type="checkbox" id="spin" checked> Spin</label>
+  <div id="legend"></div>
+</div>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const tip = document.getElementById('tip');
+let pts = [];
+let rows = new Map();
+let groupColor = new Map();
+let yaw = 0.6, pitch = 0.35, zoom = 1, minDay = 0, maxDay = 0, day = 0, playing = false;
+let hover = -1, mouse = null, drawn = [];
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function resize() {
+  const r = devicePixelRatio || 1;
+  cv.width = innerWidth * r;
+  cv.height = innerHeight * r;
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+}
+addEventListener('resize', resize);
+
+function visible(p) {
+  const w = Number(document.getElementById('win').value);
+  if (!w) return p.d.some((d) => d <= day);
+  return p.d.some((d) => d <= day && d > day - w);
+}
+
+function colour(p, alpha) {
+  if (document.getElementById('colorBy').value === 'group') return groupColor.get(p.g).replace('ALPHA', alpha);
+  const w = rows.get(p.g)?.weight ?? 0;
+  const rgb = css(w > 0 ? '--more' : w < 0 ? '--less' : '--zero');
+  return `rgba(${rgb},${w ? (0.35 + 0.65 * Math.abs(w)) * alpha : 0.45 * alpha})`;
+}
+
+function draw() {
+  if (document.getElementById('spin').checked && !mouse?.down) yaw += 0.0025;
+  const W = innerWidth, H = innerHeight, s = Math.min(W, H) * 0.38 * zoom;
+  ctx.clearRect(0, 0, W, H);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  drawn = [];
+  pts.forEach((p, i) => {
+    if (!visible(p)) return;
+    const [x0, y0, z0] = p.xyz;
+    const x1 = x0 * cy - z0 * sy, z1 = x0 * sy + z0 * cy;
+    const y2 = y0 * cp - z1 * sp, z2 = y0 * sp + z1 * cp;
+    const persp = 2.6 / (3 + z2);
+    drawn.push({ i, x: W / 2 + x1 * s * persp, y: H / 2 - 30 + y2 * s * persp, z: z2, r: Math.max(1.5, Math.sqrt(p.v) * 1.6 * persp) });
+  });
+  drawn.sort((a, b) => b.z - a.z);
+  for (const d of drawn) {
+    const p = pts[d.i];
+    const recent = p.d.some((x) => x > day - 3 && x <= day);
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+    ctx.fillStyle = colour(p, recent ? 1 : 0.7);
+    ctx.fill();
+    if (d.i === hover) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = css('--fg');
+      ctx.stroke();
+    }
+  }
+  if (playing) {
+    day = Math.min(maxDay, day + 0.25);
+    if (day >= maxDay) playing = false, (document.getElementById('play').textContent = '▶ Play');
+    syncDay();
+  }
+  requestAnimationFrame(draw);
+}
+
+function syncDay() {
+  const el = document.getElementById('day');
+  el.value = Math.floor(day);
+  document.getElementById('dayLabel').textContent = new Date(Math.floor(day) * 86400000).toISOString().slice(0, 10);
+}
+
+cv.addEventListener('mousedown', (e) => (mouse = { down: true, x: e.clientX, y: e.clientY }));
+addEventListener('mouseup', () => mouse && (mouse.down = false));
+addEventListener('mousemove', (e) => {
+  if (mouse?.down) {
+    yaw += (e.clientX - mouse.x) * 0.008;
+    pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - mouse.y) * 0.008));
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+  }
+  let best = -1, bd = 144;
+  for (const d of drawn) {
+    const dd = (d.x - e.clientX) ** 2 + (d.y - e.clientY) ** 2;
+    if (dd < Math.max(bd, d.r * d.r)) (bd = dd), (best = d.i);
+  }
+  hover = best;
+  if (best < 0) return (tip.style.display = 'none');
+  const p = pts[best];
+  const r = rows.get(p.g);
+  tip.style.display = 'block';
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - 370) + 'px';
+  tip.style.top = e.clientY + 14 + 'px';
+  tip.textContent = `${p.t} (${p.h}) · ${r?.name ?? ''} · weight ${r?.weight ?? 0} · ${p.v} visit${p.v > 1 ? 's' : ''}`;
+});
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoom = Math.max(0.4, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)));
+}, { passive: false });
+document.getElementById('day').addEventListener('input', (e) => ((day = Number(e.target.value)), syncDay()));
+document.getElementById('play').addEventListener('click', (e) => {
+  if (!playing && day >= maxDay) day = minDay;
+  playing = !playing;
+  e.target.textContent = playing ? '❚❚ Pause' : '▶ Play';
+});
+document.getElementById('colorBy').addEventListener('change', legend);
+
+function legend() {
+  const byGroup = document.getElementById('colorBy').value === 'group';
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  const items = byGroup
+    ? [...rows.values()].map((r) => [groupColor.get(r.id).replace('ALPHA', 1), r.name])
+    : [[`rgb(${css('--more')})`, 'More of this'], [`rgb(${css('--less')})`, 'Less of this'], [`rgb(${css('--zero')})`, 'Not in the lens']];
+  for (const [c, name] of items) {
+    const s = document.createElement('span');
+    s.innerHTML = `<i style="background:${c}"></i>`;
+    s.append(name);
+    el.append(s);
+  }
+}
+
+fetch('/api/state').then((r) => r.json()).then((s) => {
+  pts = s.points;
+  rows = new Map(s.rows.map((r) => [r.id, r]));
+  s.rows.forEach((r, i) => groupColor.set(r.id, `hsla(${Math.round((i * 137.5) % 360)},65%,55%,ALPHA)`));
+  const days = pts.flatMap((p) => p.d);
+  minDay = Math.min(...days);
+  maxDay = Math.max(...days);
+  day = maxDay;
+  const el = document.getElementById('day');
+  el.min = minDay;
+  el.max = maxDay;
+  syncDay();
+  legend();
+  resize();
+  draw();
+});
+</script>
+</body>
+</html>
