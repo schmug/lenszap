@@ -30,7 +30,6 @@
 import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 import { badgeFor, isPausedOn } from '../core/pause.js';
-import { holdScript, HOLD_SCRIPT_ID } from '../core/hold.js';
 import { DEFAULT_HOSTED, hostedTarget, hostedOrigin, hostedScorerId, effectiveScorer, withRetry, HOSTED_PROVIDERS } from '../core/hosted.js';
 
 // Default zap threshold per scorer. The word-only scorer's confidence is coarse,
@@ -405,23 +404,6 @@ const handlers = {
   }
 };
 
-// The hold stylesheet is registered only while Settings → "Hold the first
-// screen" is on, and never for a paused site or while paused everywhere, so a
-// paused page is never touched. Calls run one after another.
-let holdSync = Promise.resolve();
-function syncHold() {
-  holdSync = holdSync.then(async () => {
-    if (!chrome.scripting?.registerContentScripts) return;
-    const { settings, sites } = await load();
-    const want = holdScript(settings, sites);
-    const have = (await chrome.scripting.getRegisteredContentScripts({ ids: [HOLD_SCRIPT_ID] })).length > 0;
-    if (!want && have) await chrome.scripting.unregisterContentScripts({ ids: [HOLD_SCRIPT_ID] });
-    else if (want && have) await chrome.scripting.updateContentScripts([want]);
-    else if (want) await chrome.scripting.registerContentScripts([want]);
-  }).catch((err) => noteError({ api: 'hold', endpoint: null }, err, 0, 0));
-  return holdSync;
-}
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = handlers[msg?.type];
   if (!handler) return false;
@@ -434,10 +416,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // The toolbar button opens the side panel, where all the controls are.
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 syncGlobalBadge();
-syncHold();
-chrome.runtime.onInstalled.addListener(() => syncHold());
-chrome.runtime.onStartup?.addListener(() => syncHold());
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) syncGlobalBadge();
-  if (area === 'local' && (changes.settings || changes.sites)) { abortPausedRequests(); syncHold(); }
+  if (area === 'local' && (changes.settings || changes.sites)) abortPausedRequests();
 });

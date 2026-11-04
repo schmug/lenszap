@@ -43,7 +43,13 @@ const context = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir()
   headless: true,
   channel: 'chromium', // the full browser in new headless mode; headless_shell cannot load extensions
   viewport: { width: 1280, height: 900 },
-  args: [`--disable-extensions-except=${zapperDir}`, `--load-extension=${zapperDir}`]
+  args: [
+    `--disable-extensions-except=${zapperDir}`, `--load-extension=${zapperDir}`,
+    // Ordinary (non-loopback) site names served by a local server, for the hold
+    // check: the extension's host permissions are loopback only, and the hold
+    // must work everywhere else too.
+    '--host-resolver-rules=MAP hold.example 127.0.0.1, MAP paused.example 127.0.0.1'
+  ]
 });
 let [worker] = context.serviceWorkers();
 if (!worker) worker = await context.waitForEvent('serviceworker');
@@ -666,12 +672,13 @@ await worker.evaluate(() => chrome.storage.local.set({ sites: {}, hostedKeys: {}
 console.log('hosted: nothing sent without a key, without granted access, or on a site kept off it');
 
 // --- Hold the first screen until it is scored (opt-in) ---
-// Served from a real server: Chromium does not inject dynamically registered
-// stylesheets into pages Playwright fulfils with route(). 127.0.0.1 is held;
-// localhost is the paused site. The page itself records what a reader would
+// Served from a real server under ordinary site names (hold.example and
+// paused.example, mapped to 127.0.0.1 above), not loopback ones: the
+// extension has host permission for loopback only, and a dynamically
+// registered stylesheet once worked there and nowhere else. The page itself records what a reader would
 // have seen: whether it was transparent while parsing, and whether any block
 // was zapped in sight.
-const holdPage = (tag) => '<!doctype html><meta charset="utf-8"><title>Hold page (fictional)</title><script>' +
+const holdHead = '<!doctype html><meta charset="utf-8"><title>Hold page (fictional)</title><script>' +
   'window.__hold = { atParse: null, zapping: 0, zappedHeld: 0, shownAt: null };' +
   'addEventListener("DOMContentLoaded", () => { __hold.atParse = getComputedStyle(document.documentElement).opacity; });' +
   'new MutationObserver((ms) => { for (const m of ms) {' +
@@ -679,29 +686,41 @@ const holdPage = (tag) => '<!doctype html><meta charset="utf-8"><title>Hold page
   '  if (m.attributeName === "data-lpz-zapped" && !document.documentElement.hasAttribute("data-lpz-shown")) __hold.zappedHeld++;' +
   '  if (m.attributeName === "data-lpz-shown") __hold.shownAt = performance.now();' +
   '} }).observe(document.documentElement, { attributes: true, subtree: true });' +
-  '</script><body>' +
+  '</script>';
+const holdBody = (tag) => '<body>' +
   Array.from({ length: tag === 'busy' ? 16 : 6 }, (_, i) => `<p>Paragraph ${i + 1} of the ${tag} page, about the harbour ferry and its winter crossings, item ${i + 1}.</p>`).join('') +
   '</body>';
 const holdServer = createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-  res.end(holdPage(req.url.slice(1) || 'hold'));
+  // The body arrives a moment after the head, as on a real site, so the page
+  // is still loading when the setting is read.
+  res.write(holdHead);
+  setTimeout(() => res.end(holdBody(req.url.slice(1) || 'hold')), 300);
 }).listen(0, '127.0.0.1');
 await new Promise((r) => holdServer.once('listening', r));
 const holdUrl = (host, path) => `http://${host}:${holdServer.address().port}/${path}`;
-const holdRegistered = () => worker.evaluate(async () => (await chrome.scripting.getRegisteredContentScripts({ ids: ['lpz-hold'] }))[0] ?? null);
-const waitHold = async (test) => { for (let i = 0; i < 100 && !test(await holdRegistered()); i++) await page.waitForTimeout(20); };
 const htmlOpacity = () => page.evaluate(() => getComputedStyle(document.documentElement).opacity);
+const notHeld = async (host, path, why) => {
+  await page.goto('about:blank');
+  await page.goto(holdUrl(host, path));
+  await page.waitForTimeout(800);
+  const seen = await page.evaluate(() => window.__hold);
+  assert.equal(seen.atParse, '1', `hold: ${why}: not held`);
+  assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-lpz-hold') || document.documentElement.hasAttribute('data-lpz-shown')), false, `hold: ${why}: the page is not touched`);
+};
 await page.goto('about:blank');
-assert.equal(await holdRegistered(), null, 'hold: off by default, nothing registered');
 await worker.evaluate((settings) => chrome.storage.local.set({ settings, sites: {} }), {
-  threshold: 0.8, scorer: 'model', hideUnmatched: true, holdFirstScreen: true,
+  threshold: 0.8, scorer: 'model', hideUnmatched: true,
   model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in', concurrency: 2 }
 });
-await waitHold((r) => r);
-assert.ok(await holdRegistered(), 'hold: registered once turned on');
+await notHeld('hold.example', 'off', 'off by default');
+await worker.evaluate(async () => {
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({ settings: { ...settings, holdFirstScreen: true } });
+});
 // Scored within the hold: blank while parsing, zapped out of sight, then shown.
 modelDelay = 300;
-await page.goto(holdUrl('127.0.0.1', 'first'));
+await page.goto(holdUrl('hold.example', 'first'));
 await page.waitForFunction(() => document.documentElement.hasAttribute('data-lpz-shown'), null, { timeout: 5000 });
 let seen = await page.evaluate(() => window.__hold);
 assert.equal(seen.atParse, '0', 'hold: the page is transparent while it loads');
@@ -719,7 +738,7 @@ await worker.evaluate(async () => {
   const { settings } = await chrome.storage.local.get('settings');
   await chrome.storage.local.set({ settings: { ...settings, model: { ...settings.model, concurrency: 4 } } });
 });
-await page.goto(holdUrl('127.0.0.1', 'busy'));
+await page.goto(holdUrl('hold.example', 'busy'));
 await page.waitForFunction(() => document.documentElement.hasAttribute('data-lpz-shown'), null, { timeout: 6000 });
 const pendingAtShow = await page.evaluate(() => [...document.querySelectorAll('[data-lpz-pending]')].map((el) => getComputedStyle(el).opacity));
 assert.ok(pendingAtShow.length > 0, 'hold: blocks still being judged when the page shows are marked pending');
@@ -730,34 +749,19 @@ assert.equal(seen.zapping, 0, `hold: nothing on a busy first screen is zapped in
 console.log(`hold, busy first screen: shown at ${Math.round(seen.shownAt)} ms with ${pendingAtShow.length} block(s) pending, ${seen.zappedHeld} zapped before showing, 0 in sight`);
 // A model that does not answer: the page shows at the limit anyway.
 modelDelay = 20000;
-await page.goto(holdUrl('127.0.0.1', 'slow'));
+await page.goto(holdUrl('hold.example', 'slow'));
 await page.waitForTimeout(1500);
 assert.equal(await htmlOpacity(), '0', 'hold: still held at 1.5 s while the model is slow');
 await page.waitForFunction(() => document.documentElement.hasAttribute('data-lpz-shown'), null, { timeout: 4000 });
 assert.equal(await htmlOpacity(), '1', 'hold: shown though the model never answered');
 modelDelay = 40;
-// A paused site is never held, or touched at all.
-await page.goto('about:blank');
-await worker.evaluate(() => chrome.storage.local.set({ sites: { localhost: { paused: true } } }));
-await waitHold((r) => r?.excludeMatches?.includes('*://localhost/*'));
-await page.goto(holdUrl('localhost', 'paused'));
-await page.waitForTimeout(800);
-seen = await page.evaluate(() => window.__hold);
-assert.equal(seen.atParse, '1', 'hold: a paused site is not held');
-assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-lpz-shown')), false, 'hold: a paused page is not touched');
-// Paused everywhere, or turned off: unregistered.
-await page.goto('about:blank');
+// A paused site, or paused everywhere: never held, or touched at all.
+await worker.evaluate(() => chrome.storage.local.set({ sites: { 'paused.example': { paused: true } } }));
+await notHeld('paused.example', 'paused', 'a paused site');
 await setPausedEverywhere(true);
-await waitHold((r) => !r);
-assert.equal(await holdRegistered(), null, 'hold: unregistered while paused everywhere');
+await notHeld('hold.example', 'everywhere', 'paused everywhere');
 await setPausedEverywhere(false);
-await waitHold((r) => r);
-await worker.evaluate(async () => {
-  const { settings } = await chrome.storage.local.get('settings');
-  await chrome.storage.local.set({ settings: { ...settings, holdFirstScreen: false }, sites: {} });
-});
-await waitHold((r) => !r);
-assert.equal(await holdRegistered(), null, 'hold: unregistered once turned off');
+await worker.evaluate(() => chrome.storage.local.set({ sites: {} }));
 holdServer.close();
 console.log('hold: blank until scored, shown by 3 s on a silent model, never on a paused site');
 

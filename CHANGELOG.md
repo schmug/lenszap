@@ -7,6 +7,14 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.5.2
+
+- **Hold the first screen** now works on real sites. 0.5.0 and 0.5.1 held
+  pages only on localhost: Chrome injects a dynamically registered stylesheet
+  only where the extension has host permission, and LensZap's is loopback
+  only. A small document_start script now reads the setting and marks the
+  page instead. The `scripting` permission is gone.
+
 ## 0.5.1
 
 - **Hold the first screen** now works with a local model and on heavy pages.

@@ -44,7 +44,8 @@ import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
 import { pauseScope, pauseLabel, badgeFor, isPausedOn, pauseTransition } from '../core/pause.js';
-import { holdScript, holdDone, HOLD_MS, HOLD_MAX_MS, PENDING_MAX_MS, HOLD_SCRIPT_ID } from '../core/hold.js';
+import { shouldHold, holdDone, HOLD_MS, HOLD_MAX_MS, PENDING_MAX_MS } from '../core/hold.js';
+import vm from 'node:vm';
 import {
   HOSTED_PROVIDERS,
   hostedTarget,
@@ -224,26 +225,37 @@ await test('pause: browser-wide and per-site pauses are independent', () => {
   assert.equal(pauseLabel(null), '');
 });
 
-await test('hold: registered only when opted in and not paused everywhere', () => {
-  assert.equal(holdScript({}, {}), null, 'off by default');
-  assert.equal(holdScript({ holdFirstScreen: true, paused: true }, {}), null, 'paused everywhere: nothing held');
-  const h = holdScript({ holdFirstScreen: true, scorer: 'model' }, {});
-  assert.equal(h.id, HOLD_SCRIPT_ID);
-  assert.deepEqual(h.css, ['content/hold.css']);
-  assert.equal(h.runAt, 'document_start');
-  assert.equal(h.allFrames, false);
-  assert.deepEqual(h.excludeMatches, []);
+// The cases shouldHold() and content/hold-start.js must agree on.
+const HOLD_CASES = [
+  [{}, undefined, false, 'off by default'],
+  [{ holdFirstScreen: true, scorer: 'model' }, undefined, true, 'on'],
+  [{ holdFirstScreen: true }, { threshold: 0.7 }, true, 'on, word scorer, a site with its own threshold'],
+  [{ holdFirstScreen: true, scorer: 'model', paused: true }, undefined, false, 'paused everywhere'],
+  [{ holdFirstScreen: true, scorer: 'model' }, { paused: true }, false, 'paused on this site'],
+  [{ holdFirstScreen: true, scorer: 'hosted' }, { noHosted: true }, false, 'kept off the hosted model: scored by nothing'],
+  [{ holdFirstScreen: true, scorer: 'model' }, { noHosted: true }, true, 'noHosted only matters with the hosted scorer']
+];
+
+await test('hold: only when opted in, nothing is paused, and the site is scored', () => {
+  for (const [settings, site, want, why] of HOLD_CASES) assert.equal(shouldHold(settings, site), want, why);
 });
 
-await test('hold: paused sites and sites kept off the hosted model are never held', () => {
-  const sites = {
-    'b.example': { paused: true },
-    'a.example': { noHosted: true },
-    'c.example': { threshold: 0.7 },
-    '[::1]': { paused: true } // not a valid match-pattern host: left to the content script
-  };
-  assert.deepEqual(holdScript({ holdFirstScreen: true, scorer: 'model' }, sites).excludeMatches, ['*://b.example/*']);
-  assert.deepEqual(holdScript({ holdFirstScreen: true, scorer: 'hosted' }, sites).excludeMatches, ['*://a.example/*', '*://b.example/*']);
+await test('hold: content/hold-start.js marks the page exactly when shouldHold() says', async () => {
+  const code = readFileSync(new URL('../content/hold-start.js', import.meta.url), 'utf8');
+  for (const [settings, site, want, why] of HOLD_CASES) {
+    const attrs = new Set();
+    const html = { hasAttribute: (n) => attrs.has(n), setAttribute: (n) => attrs.add(n) };
+    const ctx = {
+      location: { hostname: 'a.example' },
+      document: { documentElement: html, readyState: 'loading' },
+      chrome: { storage: { local: { get: async () => ({ settings, sites: site ? { 'a.example': site } : {} }) } } }
+    };
+    ctx.window = ctx;
+    ctx.window.top = ctx;
+    vm.runInNewContext(code, ctx);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(attrs.has('data-lpz-hold'), want, why);
+  }
 });
 
 await test('hold: lifted once no first-screen block waits for a score', () => {
@@ -253,7 +265,7 @@ await test('hold: lifted once no first-screen block waits for a score', () => {
   waiting.clear();
   assert.equal(holdDone(['b1', 'b2'], (id) => waiting.has(id)), true);
   const css = readFileSync(new URL('../content/hold.css', import.meta.url), 'utf8');
-  assert.match(css, new RegExp(`html:not\\(\\[data-lpz-shown\\]\\) \\{\\s*animation: lpz-hold ${HOLD_MAX_MS / 1000}s`), 'the page ceiling matches HOLD_MAX_MS');
+  assert.match(css, new RegExp(`html\\[data-lpz-hold\\]:not\\(\\[data-lpz-shown\\]\\) \\{\\s*animation: lpz-hold ${HOLD_MAX_MS / 1000}s`), 'the page ceiling matches HOLD_MAX_MS');
   assert.match(css, new RegExp(`\\[data-lpz-pending\\] \\{\\s*animation: lpz-hold ${PENDING_MAX_MS / 1000}s`), 'the block ceiling matches PENDING_MAX_MS');
   assert.ok(HOLD_MS < HOLD_MAX_MS, 'the script gives up well before the stylesheet does');
 });
