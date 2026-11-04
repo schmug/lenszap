@@ -218,6 +218,8 @@ npm run compare-models -- --models ggml-org/Kev-4B-GGUF --browser nli:Xenova/nli
 
 `--download` is the only step that touches the network. While scoring, the page may load only files from its own loopback server: libraries from `node_modules`, weights from `eval/data/models/`, and any other request is refused and counted (`GET /health`). Use `--device wasm` for the CPU fallback, and `--headed` if headless Chromium finds no GPU adapter. Browser models score one block at a time; memory is the scorer and all its Chromium processes.
 
+The first run (2026-11-04, Apple M4 Max, 538 labelled blocks, 65%, default mode) found nothing that beats Kev-4B yet, but a small model is 40× faster. Kev-4B hid 1 wanted block and kept 10 of 18 should-go blocks at 1.3 s per block. `Xenova/nli-deberta-v3-small` hid 2 and kept 12, at 30 ms per block. `Xenova/bge-small-en-v1.5` with its query prefix hid none at 70% and kept 13, at 9 ms per block. The WebLLM chat models (Qwen2.5 0.5B and 1.5B, Qwen3 1.7B) left 25–65% of blocks unscored, because they drop passage ids from a 12-block batch, so they are not usable as is. Headless Chromium on macOS had no fp16 WebGPU adapter, so the run used `--headed`. No run made a request outside the machine.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
