@@ -1042,6 +1042,8 @@ await test('history: the 3D map axes are scaled to [-1, 1] and deterministic', (
   assert.deepEqual(p, project3(v));
   assert.equal(p.length, 5);
   for (let a = 0; a < 3; a++) assert.equal(Math.max(...p.map((x) => Math.abs(x[a]))).toFixed(6), '1.000000');
+});
+
 await test('eval browser scorer: System One questions become NLI hypotheses', async () => {
   const { questionToHypothesis, readSystemOneBody, systemOneAnswers } = await import('../eval/browser-scorer/shared.js');
   assert.equal(questionToHypothesis('Is this passage about cybersecurity?'), 'This passage is about cybersecurity.');
