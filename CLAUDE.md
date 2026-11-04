@@ -47,6 +47,11 @@ No build step and no runtime dependencies: load the directory unpacked.
   pass; on a mismatch everything is restored.
 - **Never zapped:** page chrome and controls, corrections and primary sources,
   and any block the scorer returned nothing for.
+- **The first-screen hold fails open.** `settings.holdFirstScreen` registers
+  `content/hold.css` (core/hold.js) at document_start; its CSS animation ends
+  the hold after 3 s with no script, and the content script lifts it sooner on
+  scores, failure, or pause. Never registered for paused sites or while paused
+  everywhere. Keep `HOLD_MS` and the stylesheet's duration in step (tested).
 - **Unmatched blocks** (matching none of the positive interests) are kept by
   default; `settings.hideUnmatched` (Settings → "Also hide blocks that match
   none of my interests") hides them too. `decide()` and `offLensConfidence()`

@@ -33,6 +33,13 @@ A way to break any of them is a security problem worth reporting.
 - **Nothing is deleted from the page.** Zapping hides blocks with a style and
   never removes, rewrites, or reorders nodes, so **Before** and **Show** always
   give back the page as published.
+- **A held page always shows.** With Settings → "Hold the first screen until
+  it is scored" on, pages start transparent until their first screen is
+  judged. The stylesheet that holds them ends the hold by itself after 3
+  seconds, with no script needed, so a silent model or a broken content script
+  never leaves a page blank. It is never applied on a paused site or while
+  paused everywhere. The `scripting` permission is used only to register that
+  one stylesheet.
 - **Every hidden block is accounted for.** The ledger lists every hidden block,
   and after every pass the zapper checks the page against it; on a mismatch it
   restores everything.

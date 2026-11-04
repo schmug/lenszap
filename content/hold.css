@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: Apache-2.0
+ *
+ * Opt-in: Settings → "Hold the first screen until it is scored". Registered at
+ * document_start only while that setting is on (core/hold.js), never on a
+ * paused site or while paused everywhere.
+ *
+ * The page stays transparent until the content script marks it shown. The
+ * animation is the hard timeout: after 3 s (core/hold.js HOLD_MS) it ends and
+ * the page shows whether or not any script ran. Every way this can fail (a
+ * page style that overrides it, a dead model, a crashed script) fails open.
+ */
+
+html:not([data-lpz-shown]) {
+  animation: lpz-hold 3s linear !important;
+}
+
+@keyframes lpz-hold {
+  from, to { opacity: 0; }
+}

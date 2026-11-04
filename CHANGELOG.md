@@ -7,6 +7,15 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.5.0
+
+- **Hold the first screen until it is scored** (Settings → Display, off by
+  default). A page you open stays blank until the blocks on its first screen
+  are judged, so zapped blocks never flash into view. The hold ends after 3
+  seconds at most, even if the model is silent, and at once if it fails. Never
+  on a paused site or while paused everywhere. Adds the `scripting` permission,
+  used only to register the hold stylesheet while the setting is on.
+
 ## 0.4.0
 
 - **Hosted scorer, opt-in.** Settings can point scoring at a hosted model with

@@ -44,6 +44,7 @@ import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
 import { pauseScope, pauseLabel, badgeFor, isPausedOn, pauseTransition } from '../core/pause.js';
+import { holdScript, holdDone, HOLD_MS, HOLD_SCRIPT_ID } from '../core/hold.js';
 import {
   HOSTED_PROVIDERS,
   hostedTarget,
@@ -207,6 +208,38 @@ await test('pause: browser-wide and per-site pauses are independent', () => {
   assert.equal(pauseScope({ paused: false }, undefined), null);
   assert.equal(pauseLabel('everywhere'), 'Paused everywhere');
   assert.equal(pauseLabel(null), '');
+});
+
+await test('hold: registered only when opted in and not paused everywhere', () => {
+  assert.equal(holdScript({}, {}), null, 'off by default');
+  assert.equal(holdScript({ holdFirstScreen: true, paused: true }, {}), null, 'paused everywhere: nothing held');
+  const h = holdScript({ holdFirstScreen: true, scorer: 'model' }, {});
+  assert.equal(h.id, HOLD_SCRIPT_ID);
+  assert.deepEqual(h.css, ['content/hold.css']);
+  assert.equal(h.runAt, 'document_start');
+  assert.equal(h.allFrames, false);
+  assert.deepEqual(h.excludeMatches, []);
+});
+
+await test('hold: paused sites and sites kept off the hosted model are never held', () => {
+  const sites = {
+    'b.example': { paused: true },
+    'a.example': { noHosted: true },
+    'c.example': { threshold: 0.7 },
+    '[::1]': { paused: true } // not a valid match-pattern host: left to the content script
+  };
+  assert.deepEqual(holdScript({ holdFirstScreen: true, scorer: 'model' }, sites).excludeMatches, ['*://b.example/*']);
+  assert.deepEqual(holdScript({ holdFirstScreen: true, scorer: 'hosted' }, sites).excludeMatches, ['*://a.example/*', '*://b.example/*']);
+});
+
+await test('hold: lifted once no first-screen block waits for a score', () => {
+  const waiting = new Set(['b2']);
+  assert.equal(holdDone([], () => true), true, 'nothing on the first screen');
+  assert.equal(holdDone(['b1', 'b2'], (id) => waiting.has(id)), false);
+  waiting.clear();
+  assert.equal(holdDone(['b1', 'b2'], (id) => waiting.has(id)), true);
+  const css = readFileSync(new URL('../content/hold.css', import.meta.url), 'utf8');
+  assert.match(css, new RegExp(`animation: lpz-hold ${HOLD_MS / 1000}s`), 'the stylesheet timeout matches HOLD_MS');
 });
 
 await test('pause: either pause stops a site; each site pauses on its own', () => {
