@@ -797,6 +797,15 @@ function renderSettings(message) {
     h('h3', { text: 'Display' }),
     toggle('hoverInfo', 'Show the score when I hover over a block'),
     toggle('animate', 'Animate scoring and zapping'),
+    (() => {
+      const box = h('input', { type: 'checkbox' });
+      box.checked = st.holdFirstScreen === true;
+      box.addEventListener('change', async () => { state.settings = (await send('set-settings', { patch: { holdFirstScreen: box.checked } })).settings; renderSettings(); });
+      return h('label', { class: 'check' }, box, ' Hold the first screen until it is scored');
+    })(),
+    h('p', { class: 'note', text: st.holdFirstScreen === true
+      ? 'A page you open stays blank until the blocks on its first screen are judged, so what is zapped never appears. It shows within 3 seconds; blocks still being judged then stay invisible in place until they are. Not on paused sites.'
+      : 'Pages show at once, and blocks vanish as they are judged.' }),
 
     h('h3', { text: 'Scorer' }),
     h('fieldset', {},

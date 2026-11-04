@@ -46,6 +46,9 @@ const DEFAULT_SETTINGS = {
   // Display: score popover on hover, scoring and zapping animations, sidebar state.
   hoverInfo: true,
   animate: true,
+  // Hold the first screen until it is scored (core/hold.js). Off: the page
+  // shows at once and blocks vanish as they are judged.
+  holdFirstScreen: false,
   sidebarCollapsed: false,
   // Browser-wide pause: nothing is hidden on any site. Per-site pauses are in `sites`.
   paused: false,

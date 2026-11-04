@@ -7,6 +7,32 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.5.2
+
+- **Hold the first screen** now works on real sites. 0.5.0 and 0.5.1 held
+  pages only on localhost: Chrome injects a dynamically registered stylesheet
+  only where the extension has host permission, and LensZap's is loopback
+  only. A small document_start script now reads the setting and marks the
+  page instead. The `scripting` permission is gone.
+
+## 0.5.1
+
+- **Hold the first screen** now works with a local model and on heavy pages.
+  The 3-second limit counts from when LensZap starts on the page, not from
+  navigation (a slow page used it all up before scoring began). First-screen
+  blocks still being judged at the limit stay invisible in place until judged,
+  instead of appearing and then zapping. The stylesheet's own fail-open
+  ceilings are now 8 s for the page and 10 s for a block.
+
+## 0.5.0
+
+- **Hold the first screen until it is scored** (Settings → Display, off by
+  default). A page you open stays blank until the blocks on its first screen
+  are judged, so zapped blocks never flash into view. The hold ends after 3
+  seconds at most, even if the model is silent, and at once if it fails. Never
+  on a paused site or while paused everywhere. Adds the `scripting` permission,
+  used only to register the hold stylesheet while the setting is on.
+
 ## 0.4.0
 
 - **Hosted scorer, opt-in.** Settings can point scoring at a hosted model with

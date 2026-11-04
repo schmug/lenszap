@@ -1,0 +1,21 @@
+# Public front pages heavy in commonly disliked topics, for the history-lens
+# eval: they give the eval something to zap. One URL, then comma-separated
+# tags; a page is picked when a tag overlaps a topic you weighted down.
+https://www.politico.com/ us politics,politics,donald trump,trump,elections
+https://www.foxnews.com/politics us politics,politics,donald trump,trump
+https://www.cnn.com/politics us politics,politics,donald trump,trump
+https://thehill.com/ us politics,politics,donald trump,trump,congress
+https://www.realclearpolitics.com/ us politics,politics,elections
+https://people.com/ celebrity gossip,celebrity,celebrities,movies and tv
+https://www.tmz.com/ celebrity gossip,celebrity,celebrities
+https://www.eonline.com/news celebrity gossip,celebrity,fashion and beauty
+https://www.espn.com/ sports
+https://www.cbssports.com/ sports
+https://www.buzzfeed.com/ humor and memes,celebrity gossip,shopping and deals
+https://www.cnet.com/deals/ shopping and deals,deals,shopping,advertisements
+https://www.dealnews.com/ shopping and deals,deals,shopping,advertisements
+https://www.vogue.com/ fashion and beauty,fashion,beauty
+https://www.ign.com/ video games,games
+https://variety.com/ movies and tv,celebrity gossip
+https://www.marketwatch.com/ economy and markets,personal finance,stocks
+https://www.foodnetwork.com/ food and cooking,recipes

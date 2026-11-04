@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: Apache-2.0
+ *
+ * Opt-in: Settings → "Hold the first screen until it is scored". Loaded on
+ * every page, but applies only where content/hold-start.js marked
+ * <html data-lpz-hold>: the setting is on and nothing is paused (core/hold.js).
+ *
+ * The page stays transparent until the content script marks it shown, at
+ * most 3 s after that script starts (core/hold.js HOLD_MS). First-screen
+ * blocks the model has not judged by then stay transparent in place, keeping
+ * their space, until judged. Each animation is a hard timeout that needs no
+ * script: the page shows 8 s after it is marked held (HOLD_MAX_MS) and a pending
+ * block 10 s after it was marked (PENDING_MAX_MS), whatever else happens.
+ * Every way this can fail (a page style that overrides it, a dead model, a
+ * crashed script) fails open.
+ */
+
+html[data-lpz-hold]:not([data-lpz-shown]) {
+  animation: lpz-hold 8s linear !important;
+}
+
+[data-lpz-pending] {
+  animation: lpz-hold 10s linear !important;
+}
+
+@keyframes lpz-hold {
+  from, to { opacity: 0; }
+}

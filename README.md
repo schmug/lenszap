@@ -23,6 +23,7 @@ On every page the zapper splits the content into blocks, judges how well each bl
 - **Edit your lens directly.** The **Lens** tab lists your interests: rename them, change their weights, remove them, or add new ones, and see each change's impact class before you save. **Edit as JSON** opens the whole lens. Either way, saving writes one new version, numbered by the [Adaptation Model's](https://github.com/schmug/lenspub/blob/main/spec/adaptation-model.md#4-impact-classification) rules: a small weight change or a small new interest is minor, while a removal, a rename, or any other field is major. Import, export, and reset are here too.
 - **Train it.** In the **Train** tab, start training, then click blocks on the page and mark each **Keep** or **Zap**. Zapped blocks are shown during training so you can mark the wrong ones, and links don't open. After six marks, the panel suggests a threshold and interest weights that would have decided your marks your way, and shows how many it gets wrong now and after. **Try these** moves your sliders; **Save to lens** in **Interests** keeps them. A block you kept that matches none of your interests can't be fixed by any setting, so the panel tells you to add an interest for it. Each mark stores only that block's scores and your label, never its text or the page it came from.
 - **Site rules.** Some sites lay items out in ways the generic splitter can't find, such as Hacker News, where each story is a set of table rows. A rule in `core/segment.js` makes each story or comment one block there.
+- **Hold the first screen** (Settings, off by default). For readers who would rather not watch blocks appear and then vanish: a page you open stays blank until the blocks on its first screen are judged, then shows with the zapped ones already gone. Blocks further down are judged as usual, out of sight. The page shows at most 3 seconds after LensZap starts on it, even if the model hasn't answered. Any first-screen block still being judged then stays invisible in its place (its space kept, so nothing jumps) until it is judged, so a zapped block never appears, even with a slow local model. The model failing shows everything at once. The stylesheet also ends both holds by itself (8 seconds for the page, 10 for a block), so nothing can leave a page blank. It never applies on a paused site or while paused everywhere.
 - **Pause everywhere** (Settings) stops zapping on every site at once; it does the same as a site pause, below, in every tab. It is independent of per-site pauses: a site you paused stays paused after you resume everywhere. While anything is paused the panel shows a banner with Resume buttons, and the toolbar badge turns to a grey ‖ whose tooltip says which pause applies.
 - **Pause on this site.** The zapper is inert on the page: the model is not asked, nothing is scored (not even by the word scorer), nothing is hidden, and nothing is drawn (no zaps, no scoring spark, no hover popover). Pausing mid-page stops the queue and cancels model requests already sent. Resuming picks up where it stopped: scores that arrived before the pause, and scores in the session cache, apply at once, and the rest is scored as usual, nearest the screen first. **Restore all** works on any page.
 
@@ -199,6 +200,21 @@ node --env-file=.env.hosted eval/run.mjs --hosted workers-ai --model clef --lens
 
 Each provider and model keeps its own cached scores. Timings include the network round trip.
 
+### A lens from your history (spike)
+
+`npm run history-lens` builds a starting lens from this browser's history, then sets up an eval for it. It reads Chrome's `History` file (a copy, read-only), embeds each page's title with a local embedding model, puts each page under its nearest topic from `eval/history/topics.json`, and groups the rest for you to name. A local page lists the groups, each with its share of your visits, a weight slider, and example titles. Saving writes a lens holding only the topic names and weights you set, plus a list of pages to capture: your most visited pages in each weighted group, and public front pages heavy in the topics you weighted down (`eval/history/unlike-sites.txt`).
+
+```
+llama-server -hf ggml-org/embeddinggemma-300M-GGUF --embeddings --port 8282 -b 2048 -ub 2048   # its own terminal
+npm run history-lens                          # scan, group, then the review page at http://127.0.0.1:8766/
+npm run history-lens -- --days 30 --base my-lens.json   # fewer days; merge into your lens as a new version
+npm run capture -- --list eval/data/history/capture-list.txt --data eval/data/history-eval
+npm run label -- --data eval/data/history-eval --lens eval/data/history/history-lens.json
+npm run eval -- --data eval/data/history-eval --lens eval/data/history/history-lens.json --api systemone
+```
+
+Everything stays on this machine: the embedding endpoint must be loopback, titles and addresses are written only to `eval/data/history/` (git-ignored), and the script prints counts and topic names, never a title, address, or site. The map at `/map` shows every page as a dot in 3D, sized by visits and coloured by your lens or by group, with a time slider to play your browsing back.
+
 ### In-browser models (WebGPU spike, eval only)
 
 `npm run browser-scorer` runs a model inside Chromium with WebGPU and serves it on 127.0.0.1:8282, so the eval measures it exactly like `llama-server`. It is a spike to see whether the extension could score in the browser itself, with no separate model server. Three kinds:
@@ -344,7 +360,8 @@ lenszap/
   core/                  pure, DOM-free modules (scoring, decisions, ledger check, lens editing,
                          page splitting rules, training suggestions)
   background/            storage, lens saving, local-model requests
-  content/               page segmentation, zapping, the hover popover, the scoring spark, training clicks
+  content/               page segmentation, zapping, the hover popover, the scoring spark, training clicks,
+                         and hold.css (the opt-in first-screen hold)
   sidepanel/             Chrome side panel: ledger, interests, training, lens editor, settings
   lenses/sample-lens.json
   demo/fixture.html      a fictional page for trying it

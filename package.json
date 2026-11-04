@@ -1,6 +1,6 @@
 {
   "name": "lenszap",
-  "version": "0.4.0",
+  "version": "0.5.2",
   "private": true,
   "engines": {
     "node": ">=22"
@@ -21,6 +21,7 @@
     "label": "node eval/label.mjs",
     "eval": "node eval/run.mjs",
     "compare-models": "node eval/compare-models.mjs",
+    "history-lens": "node --no-warnings=ExperimentalWarning eval/history-lens.mjs",
     "browser-scorer": "node eval/browser-scorer.mjs"
   },
   "devDependencies": {

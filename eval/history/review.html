@@ -1,0 +1,142 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lens from history</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fff; --fg: #1b1b1f; --muted: #666; --border: #e2e2e8; --row: #fafafc;
+  --accent: #3a5bd9; --accent-fg: #fff; --more: #2e7d32; --less: #c62828; --zero: #9a9aa5;
+  --bar: #dfe6fb; --ok-bg: #eaf6ee; --err-bg: #fdecea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c21; --fg: #e8e8ee; --muted: #9a9aa5; --border: #3a3a43; --row: #212126;
+    --accent: #7d97ff; --accent-fg: #10121a; --more: #81c995; --less: #ff8a80; --zero: #6b6b75;
+    --bar: #2c3448; --ok-bg: #1e3324; --err-bg: #3d1f1f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; z-index: 1; }
+header h1 { font-size: 16px; margin: 0 12px 0 0; }
+header input[type=search] { flex: 1 1 180px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--row); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+main { padding: 8px 16px 48px; max-width: 980px; margin: 0 auto; }
+p.lead { color: var(--muted); margin: 8px 0 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+.row { display: grid; grid-template-columns: minmax(140px, 1.4fr) 110px minmax(160px, 1.6fr) 56px 28px; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; }
+.row:nth-child(odd) { background: var(--row); }
+.row input[type=text] { width: 100%; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--fg); font: inherit; }
+.row input[type=text]:hover, .row input[type=text]:focus { border-color: var(--border); }
+.row.unnamed input[type=text] { font-style: italic; color: var(--muted); }
+.share { position: relative; height: 18px; background: transparent; font-size: 12px; color: var(--muted); }
+.share i { position: absolute; inset: 0 auto 0 0; background: var(--bar); border-radius: 3px; }
+.share span { position: relative; padding-left: 4px; }
+.weight { display: flex; align-items: center; gap: 6px; }
+.weight input[type=range] { flex: 1; accent-color: var(--w); }
+.row input[type=number] { width: 56px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
+.ex { border: none; background: none; padding: 0; font-size: 16px; color: var(--muted); }
+.examples { grid-column: 1 / -1; margin: 0 0 4px; padding: 6px 8px 6px 24px; color: var(--muted); font-size: 13px; }
+.status { padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
+.status.ok { background: var(--ok-bg); }
+.status.err { background: var(--err-bg); }
+code { font-size: 12px; }
+@media (max-width: 640px) { .row { grid-template-columns: 1fr 60px 28px; } .share { display: none; } .weight { grid-column: 1 / 2; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lens from history</h1>
+  <input type="search" id="q" placeholder="Filter topics">
+  <button id="zeroSmall" title="Set every group under 2% of visits to 0">Zero the small ones</button>
+  <a href="/map"><button>3D map</button></a>
+  <button class="primary" id="save">Save lens</button>
+</header>
+<main>
+  <p class="lead">Each row is a group of pages from your history. Name the unnamed ones, then set a weight: right for more of this, left for less, centre to leave it out. Only the names and weights you set go into the lens. Titles shown here stay on this machine.</p>
+  <div id="status"></div>
+  <section><h2>More of this</h2><div id="more"></div></section>
+  <section><h2>Less of this</h2><div id="less"></div></section>
+  <section><h2>Not in the lens</h2><div id="zero"></div></section>
+</main>
+<script>
+let rows = [];
+let open = new Set();
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const colorFor = (w) => (w > 0 ? 'var(--more)' : w < 0 ? 'var(--less)' : 'var(--zero)');
+
+function render() {
+  const q = $('q').value.trim().toLowerCase();
+  const total = rows.reduce((a, r) => a + r.visits, 0) || 1;
+  const max = Math.max(...rows.map((r) => r.visits), 1);
+  const html = { more: '', less: '', zero: '' };
+  // Sections are by sign; within one, biggest weight first, then most visited.
+  const sorted = [...rows].sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || b.visits - a.visits);
+  for (const r of sorted) {
+    if (q && !r.name.toLowerCase().includes(q)) continue;
+    const sec = r.weight > 0 ? 'more' : r.weight < 0 ? 'less' : 'zero';
+    const share = Math.round((100 * r.visits) / total);
+    html[sec] += `<div class="row ${/^Unnamed group/.test(r.name) ? 'unnamed' : ''}" data-id="${r.id}" style="--w:${colorFor(r.weight)}">
+      <input type="text" value="${esc(r.name)}" aria-label="Topic name" ${r.kind === 'other' ? 'disabled' : ''}>
+      <div class="share" title="${r.pages} pages, ${r.visits} visits"><i style="width:${(100 * r.visits) / max}%"></i><span>${share}% · ${r.pages} pages</span></div>
+      <div class="weight"><input type="range" min="-1" max="1" step="0.05" value="${r.weight}" aria-label="Weight for ${esc(r.name)}" ${r.kind === 'other' ? 'disabled' : ''}></div>
+      <input type="number" min="-1" max="1" step="0.05" value="${r.weight}" aria-label="Weight" ${r.kind === 'other' ? 'disabled' : ''}>
+      <button class="ex" aria-expanded="${open.has(r.id)}" title="Show example pages">${open.has(r.id) ? '▾' : '▸'}</button>
+      ${open.has(r.id) ? `<div class="examples">${r.examples.map((e) => `${esc(e.title)} <span>(${esc(e.host)})</span>`).join('<br>')}</div>` : ''}
+    </div>`;
+  }
+  for (const k of Object.keys(html)) $(k).innerHTML = html[k] || '<p class="lead">None.</p>';
+}
+
+function rowOf(el) {
+  const div = el.closest('.row');
+  return div && rows.find((r) => r.id === div.dataset.id);
+}
+
+document.addEventListener('input', (e) => {
+  const r = rowOf(e.target);
+  if (!r) return;
+  if (e.target.type === 'text') r.name = e.target.value;
+  else {
+    r.weight = Math.round(Math.max(-1, Math.min(1, Number(e.target.value) || 0)) * 100) / 100;
+    const div = e.target.closest('.row');
+    div.querySelectorAll('input[type=range],input[type=number]').forEach((x) => x !== e.target && (x.value = r.weight));
+    div.style.setProperty('--w', colorFor(r.weight));
+  }
+});
+// Re-sort into sections only when a drag ends, so the row doesn't jump mid-drag.
+document.addEventListener('change', (e) => rowOf(e.target) && e.target.type !== 'text' && render());
+document.addEventListener('click', (e) => {
+  if (!e.target.classList.contains('ex')) return;
+  const r = rowOf(e.target);
+  open.has(r.id) ? open.delete(r.id) : open.add(r.id);
+  render();
+});
+$('q').addEventListener('input', render);
+$('zeroSmall').addEventListener('click', () => {
+  const total = rows.reduce((a, r) => a + r.visits, 0) || 1;
+  for (const r of rows) if (r.visits / total < 0.02) r.weight = 0;
+  render();
+});
+$('save').addEventListener('click', async () => {
+  const res = await fetch('/api/save', { method: 'PUT', body: JSON.stringify({ rows }) });
+  const body = await res.json();
+  const unnamed = rows.filter((r) => r.weight !== 0 && /^Unnamed group/.test(r.name)).length;
+  $('status').innerHTML = res.ok
+    ? `<div class="status ok">Saved a lens with ${body.topics} topics (version ${esc(body.version)}) to <code>eval/data/history/history-lens.json</code>, and ${body.capture} pages to capture.${unnamed ? ` ${unnamed} weighted group${unnamed > 1 ? 's were' : ' was'} left out because ${unnamed > 1 ? 'they have' : 'it has'} no name.` : ''}</div>`
+    : `<div class="status err">${esc(body.error)}</div>`;
+});
+
+fetch('/api/state').then((r) => r.json()).then((s) => {
+  rows = s.rows;
+  render();
+});
+</script>
+</body>
+</html>

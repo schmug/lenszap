@@ -44,6 +44,8 @@ import { LENS_MANIFEST_SCHEMA } from '../core/lens-manifest.schema.js';
 import { evaluate as evalTraining, suggest, toExample, MIN_EXAMPLES } from '../core/train.js';
 import { siteRule, groupWithFollowing, scoringOrder, SITE_RULES, splitDecision, hasAdMarker, isAdHost, adSlotScore } from '../core/segment.js';
 import { pauseScope, pauseLabel, badgeFor, isPausedOn, pauseTransition } from '../core/pause.js';
+import { shouldHold, holdDone, HOLD_MS, HOLD_MAX_MS, PENDING_MAX_MS } from '../core/hold.js';
+import vm from 'node:vm';
 import {
   HOSTED_PROVIDERS,
   hostedTarget,
@@ -55,6 +57,20 @@ import {
   withRetry,
   originPattern
 } from '../core/hosted.js';
+
+import {
+  chromeTimeToMs,
+  msToChromeTime,
+  keepEntry,
+  collapseVisits,
+  assignTopics,
+  kmeans,
+  groupPages,
+  suggestedWeights,
+  lensFromRows,
+  normalize,
+  project3
+} from '../eval/history/lib.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
@@ -207,6 +223,51 @@ await test('pause: browser-wide and per-site pauses are independent', () => {
   assert.equal(pauseScope({ paused: false }, undefined), null);
   assert.equal(pauseLabel('everywhere'), 'Paused everywhere');
   assert.equal(pauseLabel(null), '');
+});
+
+// The cases shouldHold() and content/hold-start.js must agree on.
+const HOLD_CASES = [
+  [{}, undefined, false, 'off by default'],
+  [{ holdFirstScreen: true, scorer: 'model' }, undefined, true, 'on'],
+  [{ holdFirstScreen: true }, { threshold: 0.7 }, true, 'on, word scorer, a site with its own threshold'],
+  [{ holdFirstScreen: true, scorer: 'model', paused: true }, undefined, false, 'paused everywhere'],
+  [{ holdFirstScreen: true, scorer: 'model' }, { paused: true }, false, 'paused on this site'],
+  [{ holdFirstScreen: true, scorer: 'hosted' }, { noHosted: true }, false, 'kept off the hosted model: scored by nothing'],
+  [{ holdFirstScreen: true, scorer: 'model' }, { noHosted: true }, true, 'noHosted only matters with the hosted scorer']
+];
+
+await test('hold: only when opted in, nothing is paused, and the site is scored', () => {
+  for (const [settings, site, want, why] of HOLD_CASES) assert.equal(shouldHold(settings, site), want, why);
+});
+
+await test('hold: content/hold-start.js marks the page exactly when shouldHold() says', async () => {
+  const code = readFileSync(new URL('../content/hold-start.js', import.meta.url), 'utf8');
+  for (const [settings, site, want, why] of HOLD_CASES) {
+    const attrs = new Set();
+    const html = { hasAttribute: (n) => attrs.has(n), setAttribute: (n) => attrs.add(n) };
+    const ctx = {
+      location: { hostname: 'a.example' },
+      document: { documentElement: html, readyState: 'loading' },
+      chrome: { storage: { local: { get: async () => ({ settings, sites: site ? { 'a.example': site } : {} }) } } }
+    };
+    ctx.window = ctx;
+    ctx.window.top = ctx;
+    vm.runInNewContext(code, ctx);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(attrs.has('data-lpz-hold'), want, why);
+  }
+});
+
+await test('hold: lifted once no first-screen block waits for a score', () => {
+  const waiting = new Set(['b2']);
+  assert.equal(holdDone([], () => true), true, 'nothing on the first screen');
+  assert.equal(holdDone(['b1', 'b2'], (id) => waiting.has(id)), false);
+  waiting.clear();
+  assert.equal(holdDone(['b1', 'b2'], (id) => waiting.has(id)), true);
+  const css = readFileSync(new URL('../content/hold.css', import.meta.url), 'utf8');
+  assert.match(css, new RegExp(`html\\[data-lpz-hold\\]:not\\(\\[data-lpz-shown\\]\\) \\{\\s*animation: lpz-hold ${HOLD_MAX_MS / 1000}s`), 'the page ceiling matches HOLD_MAX_MS');
+  assert.match(css, new RegExp(`\\[data-lpz-pending\\] \\{\\s*animation: lpz-hold ${PENDING_MAX_MS / 1000}s`), 'the block ceiling matches PENDING_MAX_MS');
+  assert.ok(HOLD_MS < HOLD_MAX_MS, 'the script gives up well before the stylesheet does');
 });
 
 await test('pause: either pause stops a site; each site pauses on its own', () => {
@@ -882,6 +943,105 @@ await test('eval: hosted targets need their keys and keep the core scorer loopba
   assert.equal(score.matches.gossip, 0.1);
 });
 
+// ---- History-lens spike (eval/history/lib.mjs) ----
+
+await test('history: Chrome times convert both ways past Number range', () => {
+  const ms = Date.UTC(2026, 10, 4, 12);
+  const t = msToChromeTime(ms);
+  assert.equal(typeof t, 'bigint');
+  assert.ok(t > BigInt(Number.MAX_SAFE_INTEGER));
+  assert.equal(chromeTimeToMs(t), ms);
+});
+
+await test('history: drops search results, sign-in flows, this machine, and untitled pages', () => {
+  assert.equal(keepEntry('https://krebsonsecurity.com/2026/11/x/', 'A story'), true);
+  assert.equal(keepEntry('https://www.google.com/search?q=x', 'x - Google Search'), false);
+  assert.equal(keepEntry('https://duckduckgo.com/?q=x', 'x at DuckDuckGo'), false);
+  assert.equal(keepEntry('https://accounts.google.com/v3/signin', 'Sign in'), false);
+  assert.equal(keepEntry('https://example.com/login', 'Log in'), false);
+  assert.equal(keepEntry('http://127.0.0.1:8181/', 'llama'), false);
+  assert.equal(keepEntry('chrome://settings', 'Settings'), false);
+  assert.equal(keepEntry('https://example.com/', ''), false);
+  const long = collapseVisits([{ url: 'https://a.example/', title: 'x'.repeat(5000), visitTime: 0 }]);
+  assert.equal(long[0].title.length, 200, 'titles are cut so one page cannot overflow the embedding batch');
+});
+
+await test('history: visits collapse to one page per site and title, most visited first', () => {
+  const day = 86400000;
+  const pages = collapseVisits([
+    { url: 'https://a.example/1', title: 'One', visitTime: 10 * day },
+    { url: 'https://a.example/1?ref=x', title: 'One ', visitTime: 10 * day + 5 },
+    { url: 'https://www.a.example/1', title: 'One', visitTime: 12 * day },
+    { url: 'https://b.example/', title: 'Two', visitTime: 11 * day }
+  ]);
+  assert.equal(pages.length, 2);
+  assert.deepEqual(pages[0], { id: 'p0', url: 'https://a.example/1', title: 'One', host: 'a.example', visits: 3, days: [10, 12] });
+  assert.equal(pages[1].id, 'p1');
+});
+
+const hv = (...xs) => normalize(xs);
+await test('history: pages far from every seed topic are left for grouping', () => {
+  const topics = [hv(1, 0, 0), hv(0, 1, 0)];
+  const pagesV = [hv(1, 0.1, 0), hv(0.1, 1, 0), hv(0.9, 0.2, 0.1), hv(0, 0, 1)];
+  const { topic } = assignTopics(pagesV, topics, { unassignedShare: 0.25 });
+  assert.deepEqual(topic, [0, 1, 0, -1]);
+});
+
+await test('history: k-means is deterministic and separates clear clusters', () => {
+  const v = [hv(1, 0, 0), hv(0.9, 0.1, 0), hv(0, 0, 1), hv(0, 0.1, 0.9)];
+  const a = kmeans(v, 2, { seed: 7 });
+  assert.deepEqual(a, kmeans(v, 2, { seed: 7 }));
+  assert.equal(a[0], a[1]);
+  assert.equal(a[2], a[3]);
+  assert.notEqual(a[0], a[2]);
+});
+
+await test('history: groups fold small ones into Everything else and name the rest', () => {
+  const pages = Array.from({ length: 12 }, (_, i) => ({ id: `p${i}`, visits: i < 6 ? 3 : 1 }));
+  const vecs = pages.map((_, i) => (i < 6 ? hv(1, 0.01 * i, 0) : i < 11 ? hv(0, 0.01 * i, 1) : hv(0, 1, 0)));
+  const groups = groupPages(pages, vecs, [{ topic: 'security' }], [hv(1, 0, 0)], { unassignedShare: 0.5, minPages: 3 });
+  assert.deepEqual(groups.map((g) => [g.name, g.pages.length]), [['security', 6], ['Unnamed group 1', 6]]);
+  const folded = groupPages(pages, vecs, [{ topic: 'security' }], [hv(1, 0, 0)], { unassignedShare: 0.5, minPages: 7 });
+  assert.deepEqual(folded.map((g) => [g.name, g.pages.length, g.visits]), [['Everything else', 12, 24]]);
+  const w = suggestedWeights(groups);
+  assert.equal(w[groups[0].id], 1);
+  assert.equal(suggestedWeights(folded).other, 0);
+  assert.ok(Object.values(w).every((x) => x >= 0), 'history never suggests a negative weight');
+});
+
+await test('history: the lens holds only named, weighted topics and validates', () => {
+  const now = new Date('2026-11-04T15:16:17Z');
+  const lens = lensFromRows([
+    { name: ' cybersecurity ', weight: 1 },
+    { name: 'Unnamed group 2', weight: 0.5 },
+    { name: 'Everything else', weight: 0.4 },
+    { name: 'sports', weight: 0 },
+    { name: 'Donald Trump', weight: -0.951 },
+    { name: 'CYBERSECURITY', weight: 0.2 }
+  ], undefined, { now });
+  assert.deepEqual(lens.interpretation.priorities, [{ topic: 'cybersecurity', weight: 1 }, { topic: 'Donald Trump', weight: -0.95 }]);
+  assert.equal(lens.metadata.modified, '2026-11-04T00:00:00Z');
+  assert.deepEqual(validateLens(lens), []);
+  assert.ok(ajvValidateLens(lens), JSON.stringify(ajvValidateLens.errors));
+});
+
+await test('history: with a base lens, same-named priorities are replaced and the rest kept', async () => {
+  const edited = lensFromRows([{ name: 'data privacy', weight: 0.8 }, { name: 'sports', weight: -0.5 }], sampleLens);
+  const topics = edited.interpretation.priorities.map((p) => `${p.topic}:${p.weight}`);
+  assert.ok(topics.includes('local-first software:0.9'));
+  assert.ok(topics.includes('data privacy:0.8'));
+  assert.ok(topics.includes('sports:-0.5'));
+  assert.equal(topics.filter((t) => t.startsWith('data privacy')).length, 1);
+  const r = await commitEdit(sampleLens, edited, { sha256 });
+  assert.ok(ajvValidateLens(r.manifest), JSON.stringify(ajvValidateLens.errors));
+});
+
+await test('history: the 3D map axes are scaled to [-1, 1] and deterministic', () => {
+  const v = [hv(1, 0, 0, 0), hv(0, 1, 0, 0), hv(0, 0, 1, 0), hv(0, 0, 0, 1), hv(1, 1, 0, 0)];
+  const p = project3(v);
+  assert.deepEqual(p, project3(v));
+  assert.equal(p.length, 5);
+  for (let a = 0; a < 3; a++) assert.equal(Math.max(...p.map((x) => Math.abs(x[a]))).toFixed(6), '1.000000');
 await test('eval browser scorer: System One questions become NLI hypotheses', async () => {
   const { questionToHypothesis, readSystemOneBody, systemOneAnswers } = await import('../eval/browser-scorer/shared.js');
   assert.equal(questionToHypothesis('Is this passage about cybersecurity?'), 'This passage is about cybersecurity.');
