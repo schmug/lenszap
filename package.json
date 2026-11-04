@@ -20,7 +20,8 @@
     "capture": "node eval/capture.mjs",
     "label": "node eval/label.mjs",
     "eval": "node eval/run.mjs",
-    "compare-models": "node eval/compare-models.mjs"
+    "compare-models": "node eval/compare-models.mjs",
+    "history-lens": "node --no-warnings=ExperimentalWarning eval/history-lens.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

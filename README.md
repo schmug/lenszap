@@ -199,6 +199,21 @@ node --env-file=.env.hosted eval/run.mjs --hosted workers-ai --model clef --lens
 
 Each provider and model keeps its own cached scores. Timings include the network round trip.
 
+### A lens from your history (spike)
+
+`npm run history-lens` builds a starting lens from this browser's history, then sets up an eval for it. It reads Chrome's `History` file (a copy, read-only), embeds each page's title with a local embedding model, puts each page under its nearest topic from `eval/history/topics.json`, and groups the rest for you to name. A local page lists the groups, each with its share of your visits, a weight slider, and example titles. Saving writes a lens holding only the topic names and weights you set, plus a list of pages to capture: your most visited pages in each weighted group, and public front pages heavy in the topics you weighted down (`eval/history/unlike-sites.txt`).
+
+```
+llama-server -hf ggml-org/embeddinggemma-300M-GGUF --embeddings --port 8282   # its own terminal
+npm run history-lens                          # scan, group, then the review page at http://127.0.0.1:8766/
+npm run history-lens -- --days 30 --base my-lens.json   # fewer days; merge into your lens as a new version
+npm run capture -- --list eval/data/history/capture-list.txt --data eval/data/history-eval
+npm run label -- --data eval/data/history-eval --lens eval/data/history/history-lens.json
+npm run eval -- --data eval/data/history-eval --lens eval/data/history/history-lens.json --api systemone
+```
+
+Everything stays on this machine: the embedding endpoint must be loopback, titles and addresses are written only to `eval/data/history/` (git-ignored), and the script prints counts and topic names, never a title, address, or site. The map at `/map` shows every page as a dot in 3D, sized by visits and coloured by your lens or by group, with a time slider to play your browsing back.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:

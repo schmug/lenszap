@@ -25,6 +25,7 @@ npm run capture -- URL…   # eval/capture.mjs — real pages → blocks via the
 npm run label            # eval/label.mjs — local labelling page for captured blocks
 npm run eval             # eval/run.mjs — wrong-zap / miss / ad / evidence / bad-split rates on labelled pages
 npm run compare-models   # eval/compare-models.mjs — the eval once per llama-server decision model, with speed and memory
+npm run history-lens     # eval/history-lens.mjs — spike: history → topic groups → weights table → lens + capture list; 3D map (local only)
 npm run dev -- --site X  # scripts/dev.mjs — offline dev browser with the extension; reloads it on every save
 npm run test:watch       # npm test's unit tests, re-run on save
 npm version patch|minor|major   # bump package.json, lock, and manifest.json together (no commit/tag)
@@ -79,6 +80,9 @@ No build step and no runtime dependencies: load the directory unpacked.
 - `eval/` is developer tooling, never loaded by the extension. Captured page
   text stays in `eval/data/` (git-ignored); only fictional demo pages are
   committed.
+- `eval/history-lens.mjs` reads browser history: it never prints a title,
+  address, or site (counts and topic names only), keeps everything in
+  `eval/data/history/`, and its lens holds only topic names and weights.
 - New code files carry `SPDX-License-Identifier: Apache-2.0`.
 - **Bump the version** when a change touches anything the browser loads
   (`manifest.json`, `background/`, `content/`, `core/`, `sidepanel/`,

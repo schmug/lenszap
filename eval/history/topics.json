@@ -1,0 +1,197 @@
+{
+ "_note": "Seed topics for eval/history-lens.mjs. Pages go to the nearest seed topic; the rest are grouped for you to name. Edit freely.",
+ "topics": [
+  {
+   "topic": "cybersecurity",
+   "hint": "hacking, vulnerabilities, malware, ransomware, data breaches, incident response"
+  },
+  {
+   "topic": "data privacy",
+   "hint": "personal data, tracking, surveillance, privacy law"
+  },
+  {
+   "topic": "open source",
+   "hint": "open-source projects, maintainers, licenses, GitHub repositories"
+  },
+  {
+   "topic": "software development",
+   "hint": "programming, code, APIs, debugging, developer tools"
+  },
+  {
+   "topic": "web development",
+   "hint": "HTML, CSS, JavaScript, browsers, front-end frameworks"
+  },
+  {
+   "topic": "artificial intelligence",
+   "hint": "AI, machine learning, language models, chatbots"
+  },
+  {
+   "topic": "local-first software",
+   "hint": "offline-first apps, CRDTs, sync, owning your data"
+  },
+  {
+   "topic": "cloud and infrastructure",
+   "hint": "servers, DevOps, Kubernetes, hosting, networking"
+  },
+  {
+   "topic": "IT administration",
+   "hint": "system administration, Microsoft 365, identity, endpoint management"
+  },
+  {
+   "topic": "consumer tech",
+   "hint": "phones, laptops, gadgets, product reviews"
+  },
+  {
+   "topic": "tech industry news",
+   "hint": "tech companies, startups, layoffs, earnings"
+  },
+  {
+   "topic": "science",
+   "hint": "research, physics, biology, chemistry, discoveries"
+  },
+  {
+   "topic": "space",
+   "hint": "NASA, rockets, astronomy, satellites"
+  },
+  {
+   "topic": "health and medicine",
+   "hint": "health, disease, medicine, fitness, nutrition"
+  },
+  {
+   "topic": "mental health",
+   "hint": "anxiety, depression, therapy, wellbeing"
+  },
+  {
+   "topic": "education",
+   "hint": "schools, teaching, students, K-12, universities"
+  },
+  {
+   "topic": "parenting and family",
+   "hint": "kids, parenting, family life"
+  },
+  {
+   "topic": "US politics",
+   "hint": "Congress, elections, the White House, political parties"
+  },
+  {
+   "topic": "Donald Trump",
+   "hint": "Donald Trump, his administration, his statements and legal cases"
+  },
+  {
+   "topic": "world news",
+   "hint": "international affairs, wars, diplomacy, other countries"
+  },
+  {
+   "topic": "local news",
+   "hint": "city and county news, local government, weather events"
+  },
+  {
+   "topic": "economy and markets",
+   "hint": "stocks, inflation, interest rates, the economy"
+  },
+  {
+   "topic": "personal finance",
+   "hint": "budgeting, investing, taxes, credit cards, retirement"
+  },
+  {
+   "topic": "business",
+   "hint": "companies, management, entrepreneurship"
+  },
+  {
+   "topic": "law and courts",
+   "hint": "lawsuits, judges, the Supreme Court, regulation"
+  },
+  {
+   "topic": "climate and environment",
+   "hint": "climate change, energy, pollution, nature"
+  },
+  {
+   "topic": "energy",
+   "hint": "electricity, solar, oil and gas, batteries, EVs"
+  },
+  {
+   "topic": "cars and transport",
+   "hint": "cars, electric vehicles, traffic, transit"
+  },
+  {
+   "topic": "sports",
+   "hint": "games, teams, scores, athletes, leagues"
+  },
+  {
+   "topic": "celebrity gossip",
+   "hint": "celebrities, rumors, relationships, red carpets"
+  },
+  {
+   "topic": "movies and TV",
+   "hint": "films, television shows, streaming, trailers, reviews"
+  },
+  {
+   "topic": "music",
+   "hint": "songs, albums, artists, concerts"
+  },
+  {
+   "topic": "video games",
+   "hint": "gaming, consoles, game reviews, esports"
+  },
+  {
+   "topic": "books and reading",
+   "hint": "books, authors, literature, reviews"
+  },
+  {
+   "topic": "food and cooking",
+   "hint": "recipes, cooking, restaurants"
+  },
+  {
+   "topic": "travel",
+   "hint": "trips, destinations, flights, hotels"
+  },
+  {
+   "topic": "home and garden",
+   "hint": "home improvement, DIY, gardening, real estate"
+  },
+  {
+   "topic": "shopping and deals",
+   "hint": "products, deals, discounts, online stores"
+  },
+  {
+   "topic": "fashion and beauty",
+   "hint": "clothes, style, makeup, skincare"
+  },
+  {
+   "topic": "outdoors and hobbies",
+   "hint": "hiking, camping, crafts, photography"
+  },
+  {
+   "topic": "religion and philosophy",
+   "hint": "faith, ethics, philosophy"
+  },
+  {
+   "topic": "history",
+   "hint": "historical events, archives, the past"
+  },
+  {
+   "topic": "social media",
+   "hint": "posts, influencers, platforms, online drama"
+  },
+  {
+   "topic": "humor and memes",
+   "hint": "jokes, memes, funny videos"
+  },
+  {
+   "topic": "jobs and careers",
+   "hint": "job listings, hiring, resumes, workplace advice"
+  },
+  {
+   "topic": "government services",
+   "hint": "public agencies, forms, benefits, official notices"
+  },
+  {
+   "topic": "weather",
+   "hint": "forecasts, storms, temperatures"
+  },
+  {
+   "topic": "crime and public safety",
+   "hint": "crime, police, accidents, public safety"
+  }
+ ]
+}
