@@ -215,6 +215,27 @@ npm run eval -- --data eval/data/history-eval --lens eval/data/history/history-l
 
 Everything stays on this machine: the embedding endpoint must be loopback, titles and addresses are written only to `eval/data/history/` (git-ignored), and the script prints counts and topic names, never a title, address, or site. The map at `/map` shows every page as a dot in 3D, sized by visits and coloured by your lens or by group, with a time slider to play your browsing back.
 
+### In-browser models (WebGPU spike, eval only)
+
+`npm run browser-scorer` runs a model inside Chromium with WebGPU and serves it on 127.0.0.1:8283, so the eval measures it exactly like `llama-server`. It is a spike to see whether the extension could score in the browser itself, with no separate model server. Three kinds:
+
+- `nli`: a zero-shot NLI model with transformers.js (for example `Xenova/nli-deberta-v3-xsmall`). Each yes/no question becomes a hypothesis ("This passage is about cybersecurity."), and P(entailment) is the score. It answers `/v1/systemone`.
+- `embed`: an embedding model with transformers.js (for example `Xenova/bge-small-en-v1.5`). The cosine between passage and question, mapped from `--lo`…`--hi` (default 0.2…0.6) to 0–1. It answers `/v1/systemone`.
+- `webllm`: a small chat model with WebLLM (for example `Qwen2.5-0.5B-Instruct-q4f16_1-MLC`), given the extension's chat prompt. It answers `/v1/chat/completions`, so use `--api openai`.
+
+```
+npm install --no-save @huggingface/transformers@4.3.1 @mlc-ai/web-llm@0.2.86   # once; not added to package.json
+npm run browser-scorer -- --kind nli --model Xenova/nli-deberta-v3-xsmall --download   # fetch into eval/data/models/
+npm run browser-scorer -- --kind nli --model Xenova/nli-deberta-v3-xsmall              # serve on 127.0.0.1:8283
+npm run eval -- --api systemone --endpoint http://127.0.0.1:8283 --tag browser:nli-xsmall --concurrency 1 --lens my-lens.json
+
+npm run compare-models -- --models ggml-org/Kev-4B-GGUF --browser nli:Xenova/nli-deberta-v3-xsmall,webllm:Qwen2.5-0.5B-Instruct-q4f16_1-MLC
+```
+
+`--download` is the only step that touches the network. While scoring, the page may load only files from its own loopback server: libraries from `node_modules`, weights from `eval/data/models/`, and any other request is refused and counted (`GET /health`). Use `--device wasm` for the CPU fallback, and `--headed` if headless Chromium finds no GPU adapter. Browser models score one block at a time; memory is the scorer and all its Chromium processes.
+
+The first run (2026-11-04, Apple M4 Max, 538 labelled blocks, 65%, default mode) found nothing that beats Kev-4B yet, but a small model is 40× faster. Kev-4B hid 1 wanted block and kept 10 of 18 should-go blocks at 1.3 s per block. `Xenova/nli-deberta-v3-small` hid 2 and kept 12, at 30 ms per block. `Xenova/bge-small-en-v1.5` with its query prefix hid none at 70% and kept 13, at 9 ms per block. The WebLLM chat models (Qwen2.5 0.5B and 1.5B, Qwen3 1.7B) left 25–65% of blocks unscored, because they drop passage ids from a 12-block batch, so they are not usable as is. Headless Chromium on macOS had no fp16 WebGPU adapter, so the run used `--headed`. No run made a request outside the machine.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
