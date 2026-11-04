@@ -53,8 +53,10 @@ export function keepEntry(url, title) {
 }
 
 /** A title with whitespace collapsed and a trailing " - Site Name" left in (it helps the embedding). */
+export const MAX_TITLE_CHARS = 200;
+
 export function cleanTitle(title) {
-  const t = String(title ?? '').replace(/\s+/g, ' ').trim();
+  const t = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_CHARS);
   return t.length >= 3 ? t : '';
 }
 

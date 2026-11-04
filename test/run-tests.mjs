@@ -962,6 +962,8 @@ await test('history: drops search results, sign-in flows, this machine, and unti
   assert.equal(keepEntry('http://127.0.0.1:8181/', 'llama'), false);
   assert.equal(keepEntry('chrome://settings', 'Settings'), false);
   assert.equal(keepEntry('https://example.com/', ''), false);
+  const long = collapseVisits([{ url: 'https://a.example/', title: 'x'.repeat(5000), visitTime: 0 }]);
+  assert.equal(long[0].title.length, 200, 'titles are cut so one page cannot overflow the embedding batch');
 });
 
 await test('history: visits collapse to one page per site and title, most visited first', () => {

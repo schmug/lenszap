@@ -14,7 +14,7 @@
 //        [--endpoint http://127.0.0.1:8282] [--model NAME] [--base my-lens.json] [--port 8766]
 //
 // The embedding model runs in llama-server, for example:
-//   llama-server -hf ggml-org/embeddinggemma-300M-GGUF --embeddings --port 8282
+//   llama-server -hf ggml-org/embeddinggemma-300M-GGUF --embeddings --port 8282 -b 2048 -ub 2048
 //
 // Privacy, for a tool that reads history:
 //   - Everything stays on this machine. The endpoint must be loopback, and
