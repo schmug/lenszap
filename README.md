@@ -205,7 +205,7 @@ Each provider and model keeps its own cached scores. Timings include the network
 `npm run history-lens` builds a starting lens from this browser's history, then sets up an eval for it. It reads Chrome's `History` file (a copy, read-only), embeds each page's title with a local embedding model, puts each page under its nearest topic from `eval/history/topics.json`, and groups the rest for you to name. A local page lists the groups, each with its share of your visits, a weight slider, and example titles. Saving writes a lens holding only the topic names and weights you set, plus a list of pages to capture: your most visited pages in each weighted group, and public front pages heavy in the topics you weighted down (`eval/history/unlike-sites.txt`).
 
 ```
-llama-server -hf ggml-org/embeddinggemma-300M-GGUF --embeddings --port 8282   # its own terminal
+llama-server -hf ggml-org/embeddinggemma-300M-GGUF --embeddings --port 8282 -b 2048 -ub 2048   # its own terminal
 npm run history-lens                          # scan, group, then the review page at http://127.0.0.1:8766/
 npm run history-lens -- --days 30 --base my-lens.json   # fewer days; merge into your lens as a new version
 npm run capture -- --list eval/data/history/capture-list.txt --data eval/data/history-eval
