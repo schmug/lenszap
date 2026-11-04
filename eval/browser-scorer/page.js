@@ -131,10 +131,14 @@ window.lensZap = {
       const req = { messages: body.messages, temperature: body.temperature ?? 0, max_tokens: body.max_tokens ?? 1536, stream: false };
       const schema = body.response_format?.json_schema?.schema;
       if (schema) req.response_format = { type: 'json_object', schema: JSON.stringify(schema) };
-      // Qwen3 thinks before answering unless told not to; the others ignore this.
-      req.extra_body = { enable_thinking: false };
+      // Qwen3 thinks before answering unless told not to. Qwen3 only: on other
+      // models WebLLM still inserts an empty <think></think> before the JSON.
+      if (/qwen3/i.test(state.model)) req.extra_body = { enable_thinking: false };
       const reply = await state.engine.chat.completions.create(req);
-      return { choices: reply.choices.map((c) => ({ index: c.index, message: { role: 'assistant', content: c.message?.content ?? '' } })), usage: reply.usage };
+      // Qwen3 with thinking off still opens with an empty <think></think>, which
+      // the extension's parser (core/model-scorer.js) does not strip.
+      const text = (c) => String(c.message?.content ?? '').replace(/^\s*<think>[\s\S]*?<\/think>\s*/, '');
+      return { choices: reply.choices.map((c) => ({ index: c.index, finish_reason: c.finish_reason, message: { role: 'assistant', content: text(c) } })), usage: reply.usage };
     });
   }
 };
