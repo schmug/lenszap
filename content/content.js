@@ -26,20 +26,44 @@
   if (window.top !== window) return;
 
   const url = (p) => chrome.runtime.getURL(p);
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel, pauseTransition }] =
+
+  // Settings → "Hold the first screen until it is scored": content/hold.css
+  // keeps the page transparent from document_start. It is lifted here once
+  // the first screen is scored, on any failure or pause, and by the
+  // stylesheet itself after 3 s. Checked before anything else can fail.
+  const holdOn = () => {
+    const el = document.documentElement;
+    return !!el && !el.hasAttribute('data-lpz-shown') &&
+      getComputedStyle(el).animationName.split(',').some((n) => n.trim() === 'lpz-hold');
+  };
+  let holding = holdOn();
+  let holdTimer = null;
+  const firstScreen = new Set(); // ids of blocks on the first screen, while holding
+  function reveal() {
+    if (!holding) return;
+    holding = false;
+    clearTimeout(holdTimer);
+    firstScreen.clear();
+    document.documentElement.setAttribute('data-lpz-shown', '');
+  }
+
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel, pauseTransition }, { HOLD_MS, holdDone }] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
       import(url('core/segment.js')),
       import(url('core/train.js')),
-      import(url('core/pause.js'))
-    ]);
+      import(url('core/pause.js')),
+      import(url('core/hold.js'))
+    ]).catch((err) => { reveal(); throw err; });
   const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
   const host = location.hostname;
   const rule = siteRule(host);
 
-  let state = await send('get-state', { host });
-  if (!state || state.error) return;
+  if (holding) holdTimer = setTimeout(reveal, Math.max(0, HOLD_MS - performance.now()));
+
+  let state = await send('get-state', { host }).catch(() => null);
+  if (!state || state.error) return reveal();
 
   // --- Page model ----------------------------------------------------------
 
@@ -340,6 +364,8 @@
   function enqueue(ids) {
     if (paused()) return; // nothing is scored while paused, not even by the word scorer
     ids = ids.filter((id) => blocks.has(id));
+    // Holding the page: these are the blocks it waits for.
+    if (holding) for (const id of ids) if (blocks.get(id).els.some(inView)) firstScreen.add(id);
     // Ad slots are never sent to a scorer: they are judged by structure.
     for (const id of ids) if (adSlots.has(id)) scores.set(id, adSlotScore(id, priorities()));
     ids = ids.filter((id) => !adSlots.has(id));
@@ -472,7 +498,8 @@
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const ZAP_MS = 650;
   const UNZAP_MS = 450;
-  const animating = () => state.settings.animate !== false && !reduceMotion.matches && !ui.before && !paused();
+  // Nothing animates while the page is held: it is not visible yet.
+  const animating = () => state.settings.animate !== false && !reduceMotion.matches && !ui.before && !paused() && !holding;
   const inView = (el) => {
     const r = el.getBoundingClientRect();
     return r.bottom > 0 && r.top < innerHeight && r.width > 0;
@@ -534,7 +561,16 @@
     // popover (and the hover outline) now, not on the next mouse move.
     if ((paused() || !hoverAllowed()) && (tipFor || hoverId)) hideTip();
     else if (tipFor) renderTip(tipFor);
+    maybeReveal();
     report();
+  }
+
+  // Lift the hold once no block on the first screen waits for a score. A
+  // failed model, a ledger mismatch, or a pause lifts it at once.
+  function maybeReveal() {
+    if (!holding) return;
+    if (paused() || modelError || ledgerFailure || ui.before ||
+        holdDone(firstScreen, (id) => blocks.has(id) && (active.has(id) || queue.includes(id)))) reveal();
   }
 
   // --- Reporting to the side panel ------------------------------------------------
