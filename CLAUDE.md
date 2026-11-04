@@ -48,13 +48,17 @@ No build step and no runtime dependencies: load the directory unpacked.
   pass; on a mismatch everything is restored.
 - **Never zapped:** page chrome and controls, corrections and primary sources,
   and any block the scorer returned nothing for.
-- **The first-screen hold fails open.** `settings.holdFirstScreen` registers
-  `content/hold.css` (core/hold.js) at document_start. The content script
+- **The first-screen hold fails open.** With `settings.holdFirstScreen` on,
+  `content/hold-start.js` (document_start, every page) marks
+  `<html data-lpz-hold>` while the page is still parsing, and
+  `content/hold.css` holds it (core/hold.js `shouldHold`; the two are tested
+  to agree). Don't register it dynamically: Chrome injects dynamic scripts
+  only where the extension has host permission, which is loopback. The content script
   lifts it on scores, failure, or pause, and at most `HOLD_MS` after it
   starts, marking first-screen blocks still being scored `data-lpz-pending`
   (invisible in place) until judged. The stylesheet's animations end both with
   no script (`HOLD_MAX_MS`, `PENDING_MAX_MS`; tested to match). Never
-  registered for paused sites or while paused everywhere.
+  applied on paused sites or while paused everywhere.
 - **Unmatched blocks** (matching none of the positive interests) are kept by
   default; `settings.hideUnmatched` (Settings → "Also hide blocks that match
   none of my interests") hides them too. `decide()` and `offLensConfidence()`

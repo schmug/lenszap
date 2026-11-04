@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
   "name": "LensZap (built on LensPub; not a LensPub engine)",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Hides page blocks that don't match your LensPub lens. Uses your lens, but unlike a LensPub engine it hides content. Local model by default; every zap is listed and restorable.",
   "permissions": [
     "storage",
-    "sidePanel",
-    "scripting"
+    "sidePanel"
   ],
   "host_permissions": [
     "http://localhost/*",
@@ -23,6 +22,19 @@
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/hold-start.js"
+      ],
+      "css": [
+        "content/hold.css"
+      ],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "http://*/*",
