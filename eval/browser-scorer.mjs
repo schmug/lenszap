@@ -22,9 +22,9 @@
 //   npm install --no-save @huggingface/transformers@4.3.1 @mlc-ai/web-llm@0.2.86   # once
 //   npm run browser-scorer -- --kind nli --model Xenova/nli-deberta-v3-xsmall --download
 //   npm run browser-scorer -- --kind nli --model Xenova/nli-deberta-v3-xsmall
-//   npm run eval -- --api systemone --endpoint http://127.0.0.1:8282 --tag browser:nli-xsmall --concurrency 1
+//   npm run eval -- --api systemone --endpoint http://127.0.0.1:8283 --tag browser:nli-xsmall --concurrency 1
 //
-// Options: --kind nli|embed|webllm  --model ID  --port N (default 8282)
+// Options: --kind nli|embed|webllm  --model ID  --port N (default 8283)
 //          --device webgpu|wasm (default webgpu; wasm is the CPU fallback)
 //          --dtype fp32|fp16|q8|q4|q4f16 (transformers.js weights; default: what
 //          --download fetched, fp16 when the repo has it, else fp32)
@@ -55,7 +55,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const here = join(root, 'eval/browser-scorer');
 const kind = String(args.kind ?? 'nli');
 const model = typeof args.model === 'string' ? args.model : '';
-const port = Number(args.port ?? 8282);
+// 8282 is the history-lens embedding server (README).
+const port = Number(args.port ?? 8283);
 const device = String(args.device ?? 'webgpu');
 const modelsDir = resolve(typeof args['models-dir'] === 'string' ? args['models-dir'] : join(root, 'eval/data/models'));
 const INSTALL = 'npm install --no-save @huggingface/transformers@4.3.1 @mlc-ai/web-llm@0.2.86';
