@@ -122,3 +122,9 @@ summary { cursor: pointer; font-weight: 600; }
 .suggest ul { margin: 4px 0; }
 .suggest li { font-size: 12.5px; padding: 1px 0; }
 .arrow { color: var(--faint); }
+
+/* Stats */
+table.sites { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+table.sites th { text-align: left; color: var(--muted-2); font-weight: 600; border-bottom: 1px solid var(--border); padding: 2px 4px; }
+table.sites td { border-bottom: 1px solid var(--rule); padding: 3px 4px; overflow-wrap: anywhere; }
+table.sites td:not(:first-child), table.sites th:not(:first-child) { text-align: right; white-space: nowrap; }

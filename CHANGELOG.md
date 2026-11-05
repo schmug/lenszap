@@ -7,6 +7,26 @@ Each release of the extension, newest first. The version is in
 Versions are MAJOR.MINOR.PATCH. While LensZap is below 1.0, a MINOR bump may
 include a breaking change; it says so here.
 
+## 0.7.0
+
+- **Stats tab.** A new side-panel tab with numbers on how LensZap is doing.
+  For the page you're on: time on the page (counted only while it is visible
+  and not paused), blocks found, scored, and hidden, about how long the
+  hidden blocks would have taken to read (238 words a minute), scoring time
+  per block (average, median, p95, slowest), how long the first screen and
+  the rest of the page near it took to judge, how many blocks came from the
+  score cache or were settled by the in-browser model, and failed requests.
+  The same are added up for the site and for all sites since the browser
+  started, with a short list of the sites hiding the most.
+- Cache hits and in-browser settles are counted apart from model time, so a
+  warm cache doesn't make a slow model look fast.
+- Stats are kept in memory only (`chrome.storage.session`, like the score
+  cache): forgotten when the browser closes, never sent anywhere, never
+  written to the lens. Nothing is counted while paused or in incognito
+  windows. **Reset session stats** on the tab, or Settings → "Clear it",
+  wipes them.
+- The debug report includes the page's stats.
+
 ## 0.6.0
 
 - **In-browser model.** LensZap can now run a small model itself, on your

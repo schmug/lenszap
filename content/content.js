@@ -24,6 +24,7 @@
 
 (async () => {
   if (window.top !== window) return;
+  const startedAt = performance.now(); // for the Stats tab's first-screen and page times
 
   const url = (p) => chrome.runtime.getURL(p);
 
@@ -55,14 +56,15 @@
     document.documentElement.setAttribute('data-lpz-shown', '');
   }
 
-  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel, pauseTransition }, { HOLD_MS, holdDone }] =
+  const [{ decide, checkLedger }, { scoreLexical, LEXICAL_SCORER_ID }, { siteRule, groupWithFollowing, scoringOrder, splitDecision, MIN_CHARS, MIN_HEADLINE_CHARS, STORY_LINK_CHARS, MAX_CONTAINER_CHARS, AD_SLOT_MAX_CHARS, AD_LABEL, hasAdMarker, isAdHost, adSlotScore }, { toExample }, { pauseScope, pauseLabel, pauseTransition }, { HOLD_MS, holdDone }, metricsLib] =
     await Promise.all([
       import(url('core/decide.js')),
       import(url('core/lexical-scorer.js')),
       import(url('core/segment.js')),
       import(url('core/train.js')),
       import(url('core/pause.js')),
-      import(url('core/hold.js'))
+      import(url('core/hold.js')),
+      import(url('core/metrics.js'))
     ]).catch((err) => { reveal(); throw err; });
   const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
   const host = location.hostname;
@@ -92,6 +94,11 @@
   const requestLog = []; // last model requests on this page: { n, ms, ok }, for the debug report
   let ledgerFailure = null;
   let nextId = 1;
+  // The Stats tab's numbers for this page (core/metrics.js). Nothing is
+  // counted while paused, and the clock runs only while the page is visible.
+  const metrics = metricsLib.newPageMetrics();
+  const metricsSent = {}; // what the session rollup has already been sent
+  let firstScreenIds = null; // blocks on the first screen when scoring started, until all are judged
   // Slider positions the side panel is previewing on this page, before they are stored.
   let preview = {};
   const ui = { before: false, train: false };
@@ -395,7 +402,10 @@
     if (scorerKind() === 'none') return; // nothing from this site goes to the hosted model
     if (scorerKind() === 'lexical') {
       scorerId = LEXICAL_SCORER_ID;
-      for (const s of scoreLexical(ids.map((id) => ({ id, text: blocks.get(id).text })), topics())) scores.set(s.id, s);
+      const t0 = performance.now();
+      const out = scoreLexical(ids.map((id) => ({ id, text: blocks.get(id).text })), topics());
+      metricsLib.recordLocal(metrics, out.length, performance.now() - t0);
+      for (const s of out) scores.set(s.id, s);
       return;
     }
     queue.push(...ids);
@@ -409,6 +419,7 @@
         scorerId = res.scorer;
         const hit = new Set();
         for (const s of res.scores) if (blocks.has(s.id)) { scores.set(s.id, s); hit.add(s.id); }
+        metricsLib.recordCached(metrics, hit.size);
         for (let i = queue.length - 1; i >= 0; i--) if (hit.has(queue[i])) queue.splice(i, 1);
         apply();
       })
@@ -439,9 +450,11 @@
       ids.forEach((id) => active.add(id));
       drawSparks();
       const sentAt = performance.now();
-      const logRequest = (ok) => {
-        requestLog.push({ n: ids.length, ms: Math.round(performance.now() - sentAt), ok });
+      const logRequest = (ok, res = {}) => {
+        const ms = performance.now() - sentAt;
+        requestLog.push({ n: ids.length, ms: Math.round(ms), ok });
         if (requestLog.length > 200) requestLog.shift();
+        metricsLib.recordAnswer(metrics, { n: ids.length, ms, ok, cached: res.cached ?? 0, gated: res.gated ?? 0 });
       };
       send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), priorities: priorities(), host })
         .then((res) => {
@@ -450,7 +463,7 @@
           // and no error either. resume() asks again for every unscored block.
           if (res?.paused) return;
           if (!res || res.error) throw new Error(res?.error ?? 'no answer from the extension');
-          logRequest(true);
+          logRequest(true, res);
           scorerId = res.scorer;
           for (const s of res.scores) if (s) scores.set(s.id, s);
         })
@@ -483,6 +496,8 @@
   // kept for resume.
   function pause() {
     generation++;
+    runClock();
+    firstScreenIds = null; // a first-screen time across a pause would mean nothing
     stopScoring();
     inFlight = 0;
     clearTimeout(timer);
@@ -497,6 +512,7 @@
   // once). Blocks hidden on resume zap as they would on a live page.
   function resume() {
     generation++;
+    runClock();
     stopScoring();
     inFlight = 0;
     modelError = null;
@@ -585,8 +601,40 @@
     if ((paused() || !hoverAllowed()) && (tipFor || hoverId)) hideTip();
     else if (tipFor) renderTip(tipFor);
     maybeReveal();
+    noteTimes();
     report();
   }
+
+  // --- Stats ----------------------------------------------------------------------
+
+  function runClock() {
+    metricsLib.clockRun(metrics.clock, document.visibilityState === 'visible' && !paused(), performance.now());
+  }
+
+  // First screen judged: every block that was on the first screen when
+  // scoring started has an answer. Page judged: nothing near the screen is
+  // left to score. Each is noted once, and never across a pause or a failure.
+  function noteTimes() {
+    if (paused() || scorerKind() === 'none' || metrics.scored === 0) return;
+    if (modelError) firstScreenIds = null;
+    if (firstScreenIds && ![...firstScreenIds].some(waiting)) {
+      metrics.firstScreenMs = performance.now() - startedAt;
+      firstScreenIds = null;
+    }
+    if (metrics.pageMs == null && !modelError && active.size === 0 && !queue.some((id) => near.has(id))) {
+      metrics.pageMs = performance.now() - startedAt;
+    }
+  }
+
+  const wordsIn = (id) => {
+    const b = blocks.get(id);
+    return b ? (b.words ??= metricsLib.wordCount(b.text)) : 0;
+  };
+  function hiddenNow() {
+    const ids = decisions.filter((d) => d.zap).map((d) => d.id);
+    return { hidden: ids.length, hiddenWords: ids.reduce((n, id) => n + wordsIn(id), 0) };
+  }
+  const metricsView = () => metricsLib.pageView(metrics, { now: performance.now(), blocks: blocks.size, adSlots: adSlots.size, ...hiddenNow() });
 
   // Lift the hold once no block on the first screen waits for a score. A
   // failed model, a ledger mismatch, or a pause lifts it at once. A pending
@@ -629,7 +677,8 @@
       rule: rule?.name ?? null,
       labelled: { keep: [...labels.values()].filter((l) => l === 'keep').length, zap: [...labels.values()].filter((l) => l === 'zap').length },
       zapped: decisions.filter((d) => d.zap).map(entry),
-      restored: decisions.filter((d) => d.exempt === 'restored').map(entry)
+      restored: decisions.filter((d) => d.exempt === 'restored').map(entry),
+      metrics: metricsView()
     };
   }
 
@@ -639,7 +688,11 @@
     if (reportTimer) return;
     reportTimer = setTimeout(() => {
       reportTimer = null;
-      send('page-update', { page: snapshot() }).catch(() => {});
+      // The session rollup gets what changed, never while paused, never in incognito.
+      const delta = paused() || chrome.extension?.inIncognitoContext
+        ? null
+        : metricsLib.takeDelta(metrics, metricsSent, { now: performance.now(), ...hiddenNow() });
+      send('page-update', { page: snapshot(), delta }).catch(() => {});
     }, 60);
   }
 
@@ -690,6 +743,7 @@
       progress: { ...progressNow(), queued: queue.length, inFlight },
       modelError,
       ledgerFailure: ledgerFailure ?? null,
+      metrics: metricsView(),
       requests: {
         count: requestLog.length,
         failed: requestLog.filter((r) => !r.ok).length,
@@ -981,8 +1035,16 @@
   // --- Run, and keep up with the page -------------------------------------------
 
   // A page opened while paused is not even split until the reader resumes.
-  if (!paused()) enqueue(scan());
+  if (!paused()) {
+    const ids = scan();
+    firstScreenIds = new Set(ids.filter((id) => blocks.get(id).els.some(inView)));
+    enqueue(ids);
+  }
+  runClock();
   apply();
+  // Time on page counts only while the page is visible; the rollup hears of
+  // it when the reader switches away.
+  document.addEventListener('visibilitychange', () => { runClock(); report(); });
 
   new MutationObserver((mutations) => {
     if (paused() || mutations.every((m) => overlayHost.contains(m.target))) return;

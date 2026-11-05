@@ -1152,5 +1152,116 @@ await test('in-browser: the gate matches the eval two-pass skip simulation', asy
   assert.deepEqual(sim.skip.totals.zapMissed.sort(), fast.map((f) => f.id).filter((id) => !ask.includes(id)).sort());
 });
 
+// --- Stats (core/metrics.js) --------------------------------------------------
+
+await test('metrics: percentile and summary', async () => {
+  const mt = await import('../core/metrics.js');
+  assert.equal(mt.percentile([], 0.95), null);
+  const v = Array.from({ length: 100 }, (_, i) => i + 1);
+  assert.equal(mt.percentile(v, 0.5), 50);
+  assert.equal(mt.percentile(v, 0.95), 95);
+  assert.equal(mt.percentile([7], 0.95), 7);
+  assert.deepEqual(mt.summarize([300, 100, 200, NaN]), { n: 3, mean: 200, p50: 200, p95: 300, max: 300 });
+  assert.equal(mt.summarize([]), null);
+  assert.equal(mt.wordCount("It's a breach — 3 records lost."), 6);
+  assert.equal(mt.readingSeconds(238), 60);
+  assert.equal(mt.formatMs(850), '850 ms');
+  assert.equal(mt.formatMs(1240), '1.2 s');
+  assert.equal(mt.formatMs(185_000), '3m 05s');
+  assert.equal(mt.formatMs(null), '–');
+});
+
+await test('metrics: cache hits and in-browser settles are not timed as model work', async () => {
+  const mt = await import('../core/metrics.js');
+  const m = mt.newPageMetrics();
+  mt.recordAnswer(m, { n: 1, ms: 1200 });
+  mt.recordAnswer(m, { n: 6, ms: 600, cached: 4 }); // 2 fresh blocks share 600 ms
+  mt.recordAnswer(m, { n: 1, ms: 3, cached: 1 }); // all cached: no sample
+  mt.recordAnswer(m, { n: 2, ms: 5000, ok: false });
+  mt.recordCached(m, 3);
+  mt.recordLocal(m, 4, 8);
+  assert.equal(m.scored, 1 + 6 + 1 + 3 + 4);
+  assert.equal(m.fromCache, 4 + 1 + 3);
+  assert.equal(m.requests, 4);
+  assert.equal(m.failed, 1);
+  assert.deepEqual(m.blockMs, [1200, 300, 300, 2, 2, 2, 2]);
+  const v = mt.pageView(m, { now: 0, blocks: 30, hidden: 2, hiddenWords: 476 });
+  assert.equal(v.hiddenReadingSec, 120);
+  assert.equal(v.perBlock.max, 1200);
+});
+
+await test('metrics: the time-on-page clock runs only while switched on', async () => {
+  const mt = await import('../core/metrics.js');
+  const c = mt.newPageMetrics().clock;
+  mt.clockRun(c, true, 1000);
+  mt.clockRun(c, true, 1500); // already running: no restart
+  assert.equal(mt.clockRead(c, 3000), 2000);
+  mt.clockRun(c, false, 4000); // hidden or paused
+  assert.equal(mt.clockRead(c, 9000), 3000);
+  mt.clockRun(c, true, 10000);
+  assert.equal(mt.clockRead(c, 10500), 3500);
+});
+
+await test('metrics: deltas add up to the page totals, and the rollup is bounded', async () => {
+  const mt = await import('../core/metrics.js');
+  const m = mt.newPageMetrics();
+  const sent = {};
+  assert.equal(mt.takeDelta(m, sent, { now: 0 }), null, 'an unscored page is not a page yet');
+  mt.recordAnswer(m, { n: 1, ms: 1000 });
+  m.firstScreenMs = 1500;
+  const d1 = mt.takeDelta(m, sent, { now: 0, hidden: 1, hiddenWords: 40 });
+  assert.equal(d1.page, true);
+  assert.deepEqual(d1.blockMs, [1000]);
+  assert.equal(d1.firstScreenMs, 1500);
+  assert.equal(mt.takeDelta(m, sent, { now: 0, hidden: 1, hiddenWords: 40 }), null, 'nothing new');
+  mt.recordAnswer(m, { n: 1, ms: 2000 });
+  const d2 = mt.takeDelta(m, sent, { now: 0, hidden: 0, hiddenWords: 0 }); // the reader restored it
+  assert.equal(d2.page, false);
+  assert.deepEqual(d2.blockMs, [2000]);
+  assert.equal(d2.firstScreenMs, null);
+  assert.equal(d2.hidden, -1);
+
+  const r = mt.newRollup();
+  mt.addToRollup(r, 'a.example', d1);
+  mt.addToRollup(r, 'a.example', d2);
+  mt.addToRollup(r, 'b.example', { ...d1 });
+  const view = mt.rollupView(r, 'a.example');
+  assert.equal(view.site.pages, 1);
+  assert.equal(view.site.scored, 2);
+  assert.equal(view.site.hidden, 0);
+  assert.equal(view.site.perBlock.mean, 1500);
+  assert.equal(view.all.pages, 2);
+  assert.equal(view.all.hidden, 1);
+  assert.equal(view.sites[0].host, 'b.example', 'the site hiding the most first');
+  assert.equal(mt.rollupView(r, 'nowhere.example').site, null);
+
+  // Samples stay bounded on a long page, and only new ones are sent.
+  const big = mt.newPageMetrics();
+  const bs = {};
+  for (let i = 0; i < mt.SAMPLE_LIMIT + 50; i++) mt.recordAnswer(big, { n: 1, ms: i });
+  assert.equal(big.blockMs.length, mt.SAMPLE_LIMIT);
+  assert.equal(mt.takeDelta(big, bs, { now: 0 }).blockMs.length, mt.SAMPLE_LIMIT);
+  mt.recordAnswer(big, { n: 1, ms: 9 });
+  assert.deepEqual(mt.takeDelta(big, bs, { now: 0 }).blockMs, [9]);
+
+  // Sites past the limit drop the least recently seen.
+  const many = mt.newRollup();
+  for (let i = 0; i <= mt.SITE_LIMIT; i++) mt.addToRollup(many, `s${i}.example`, { page: true, scored: 1 });
+  mt.addToRollup(many, 's1.example', { scored: 1 });
+  assert.equal(Object.keys(many.sites).length, mt.SITE_LIMIT);
+  assert.ok(!('s0.example' in many.sites) && 's1.example' in many.sites);
+  assert.equal(many.all.pages, mt.SITE_LIMIT + 1, 'the all-sites total keeps everything');
+});
+
+await test('metrics: the rollup holds counts and timings only, no text', async () => {
+  const mt = await import('../core/metrics.js');
+  const m = mt.newPageMetrics();
+  mt.recordAnswer(m, { n: 1, ms: 10 });
+  const r = mt.addToRollup(mt.newRollup(), 'a.example', mt.takeDelta(m, {}, { now: 0, hidden: 1, hiddenWords: 5 }));
+  const leaves = [];
+  (function walk(o) { for (const v of Object.values(o)) typeof v === 'object' && v ? walk(v) : leaves.push(v); })(r);
+  assert.ok(leaves.every((v) => typeof v === 'number'), 'only numbers below the hostname keys');
+});
+
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

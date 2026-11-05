@@ -11,6 +11,10 @@
 //   training     the reader's Keep/Zap marks: scores only, no text, no URLs
 //   hostedKeys   API keys for hosted scorers, by provider; never sent to pages
 //                or the side panel, never exported
+// and, in chrome.storage.session (memory only, gone when the browser closes):
+//   scoreCache   model scores by a hash of model, topics, and block text
+//   siteStats    the Stats tab's per-site counts and timings (core/metrics.js);
+//                never while paused, never from incognito
 // Only `lens` is ever exported. draftWeights, sites, and training are Adaptation State in
 // the protocol's sense (ADR-0006): local, private, and never written into the
 // manifest, because a hostname next to a preference is reading history.
@@ -36,6 +40,7 @@ import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 import { badgeFor, isPausedOn } from '../core/pause.js';
 import { DEFAULT_IN_BROWSER, MODEL_ORIGINS, inBrowserMode, inBrowserScorerId, gateSplit } from '../core/in-browser.js';
 import { looksLikeEvidence } from '../core/lexical-scorer.js';
+import { newRollup, addToRollup, rollupView } from '../core/metrics.js';
 import { DEFAULT_HOSTED, hostedTarget, hostedOrigin, hostedScorerId, effectiveScorer, withRetry, HOSTED_PROVIDERS } from '../core/hosted.js';
 
 // Default zap threshold per scorer. The word-only scorer's confidence is coarse,
@@ -119,6 +124,36 @@ function saveCacheSoon() {
   cacheSaveTimer = setTimeout(() => {
     chrome.storage.session?.set({ [CACHE_KEY]: [...scoreCache] }).catch(() => {});
   }, 500);
+}
+
+// The Stats tab's session rollup: counts and timings per site, added to by
+// each page as it is scored. Session storage, like the score cache.
+const STATS_KEY = 'siteStats';
+let stats = null;
+let statsLoaded = null;
+let statsSaveTimer = null;
+function loadStats() {
+  statsLoaded ??= (async () => {
+    try {
+      const { [STATS_KEY]: saved } = (await chrome.storage.session?.get(STATS_KEY)) ?? {};
+      stats = saved?.all && saved?.sites ? saved : newRollup();
+    } catch {
+      stats = newRollup();
+    }
+  })();
+  return statsLoaded;
+}
+function saveStatsSoon() {
+  clearTimeout(statsSaveTimer);
+  statsSaveTimer = setTimeout(() => {
+    chrome.storage.session?.set({ [STATS_KEY]: stats }).catch(() => {});
+  }, 500);
+}
+async function clearStats() {
+  await loadStats();
+  stats = newRollup();
+  clearTimeout(statsSaveTimer);
+  await chrome.storage.session?.remove(STATS_KEY);
 }
 
 function cacheKey(settings, topics, text) {
@@ -242,7 +277,9 @@ async function scoreWithModel(blocks, topics, host = null, priorities = null) {
   if (mode === 'only') {
     const t0 = Date.now();
     try {
-      return { scores: await inBrowserScores(blocks, topics), scorer: IB.scorerId };
+      await loadCache();
+      const cached = blocks.filter((b) => scoreCache.has(cacheKey(IB, topics, b.text))).length;
+      return { scores: await inBrowserScores(blocks, topics), scorer: IB.scorerId, cached, gated: 0 };
     } catch (err) {
       noteError(IB, err, Date.now() - t0, blocks.length);
       throw err;
@@ -260,6 +297,7 @@ async function scoreWithModel(blocks, topics, host = null, priorities = null) {
   await loadCache();
   const results = new Map();
   let todo = [];
+  let gated = 0;
   for (const b of blocks) {
     const hit = scoreCache.get(cacheKey(m, topics, b.text));
     if (hit) results.set(b.id, { ...hit, id: b.id });
@@ -277,6 +315,7 @@ async function scoreWithModel(blocks, topics, host = null, priorities = null) {
       const kept = new Set(keep);
       for (const s of ib) if (kept.has(s.id)) results.set(s.id, s);
       todo = todo.filter((b) => !kept.has(b.id));
+      gated = kept.size;
     } catch (err) {
       noteError(IB, err, Date.now() - g0, todo.length);
     }
@@ -305,7 +344,9 @@ async function scoreWithModel(blocks, topics, host = null, priorities = null) {
     }
   });
   if (fresh.length) saveCacheSoon();
-  return { scores: blocks.map((b) => results.get(b.id)), scorer: mode === 'gate' ? pageScorerId(settings) : modelScorerId(m) };
+  // cached and gated: for the Stats tab, so cache hits don't pass for model speed.
+  const cached = blocks.length - todo.length - gated;
+  return { scores: blocks.map((b) => results.get(b.id)), scorer: mode === 'gate' ? pageScorerId(settings) : modelScorerId(m), cached, gated };
 }
 
 // The toolbar badge: a count of hidden blocks, or ‖ in grey while paused.
@@ -445,11 +486,32 @@ const handlers = {
     return { ok: true };
   },
 
-  // From a page: the zapped count goes on the toolbar badge for that tab.
-  async 'page-update'({ page }, sender) {
+  // From a page: the zapped count goes on the toolbar badge for that tab, and
+  // what changed in its stats into the session rollup (not while paused, not
+  // from incognito).
+  async 'page-update'({ page, delta }, sender) {
     const tabId = sender?.tab?.id;
     if (tabId == null) return { ok: false };
     await showBadge(badgeFor(page), tabId);
+    if (delta && page?.host && !page.paused && !sender.tab.incognito) {
+      const { settings, sites } = await load();
+      if (!isPausedOn(settings, sites, page.host)) {
+        await loadStats();
+        addToRollup(stats, page.host, delta);
+        saveStatsSoon();
+      }
+    }
+    return { ok: true };
+  },
+
+  // The Stats tab: all sites this session, this site, and the sites hiding the most.
+  async 'site-stats'({ host }) {
+    await loadStats();
+    return rollupView(stats, host ?? '');
+  },
+
+  async 'site-stats-clear'() {
+    await clearStats();
     return { ok: true };
   },
 
@@ -470,6 +532,7 @@ const handlers = {
     scoreCache.clear();
     clearTimeout(cacheSaveTimer);
     await chrome.storage.session?.remove(CACHE_KEY);
+    await clearStats();
     return { ok: true };
   },
 
