@@ -89,6 +89,10 @@ vendor/README.md says.
 - **Lenses stay history-free.** Nothing about pages read goes into a lens.
   Drafts, per-site settings, and training marks are local Adaptation State.
   Training marks hold scores and a label only: no text, no URL.
+- **Stats stay in memory.** The Stats tab's numbers (core/metrics.js) are
+  counts and timings only, per page in the content script and per site in
+  `chrome.storage.session` (`siteStats`), never in local storage, never in a
+  lens, never counted while paused or from incognito.
 - **Saved lenses** go through `core/lens-edit.js` (`commitDraft`,
   `commitEdit`), which classifies impact per LensPub's Adaptation Model §4,
   appends `versionHistory` by content hash with no date, rounds `modified` to

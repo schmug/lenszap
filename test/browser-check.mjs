@@ -586,6 +586,28 @@ await page.waitForFunction(() => document.querySelector('p:last-of-type')?.hasAt
 assert.ok(modelCalls > longAtTop && modelCalls < 40, `long page: scrolling to the end scores what is near it (${modelCalls} of 40)`);
 console.log(`long page: ${longAtTop} of 40 blocks scored at the top, ${modelCalls} after jumping to the end`);
 
+// --- Stats: per-block timings and counts, for this page and this session ---
+const statsPanel = await context.newPage();
+await statsPanel.setViewportSize({ width: 380, height: 900 });
+await statsPanel.goto(`chrome-extension://${extId}/sidepanel/sidepanel.html?tab=${tabId}`);
+await statsPanel.click('.tabs button:text-is("Stats")');
+await statsPanel.waitForSelector('#body h3:has-text("long.example, this session")', { timeout: 5000 });
+await statsPanel.waitForSelector('#body dd:has-text("p95")', { timeout: 5000 });
+if (shots) await statsPanel.screenshot({ path: join(shots, 'panel-stats.jpg'), quality: 85 });
+const statsText = await statsPanel.textContent('#body');
+assert.match(statsText, /Per block\S*?[\d.]+ (ms|s) average · [\d.]+ (ms|s) median · [\d.]+ (ms|s) p95/, 'stats: per-block average, median, and p95');
+assert.match(statsText, /Time on page/, 'stats: time on page');
+assert.match(statsText, /All sites, this session/, 'stats: the all-sites rollup');
+await page.waitForTimeout(800); // the rollup is saved half a second after a change
+const { siteStats } = await worker.evaluate(() => chrome.storage.session.get('siteStats'));
+assert.ok(siteStats?.sites?.['long.example']?.pages >= 1, 'stats: the site rollup counts the page');
+assert.ok(siteStats.sites['long.example'].blockMs.length > 0, 'stats: the site rollup keeps per-block times');
+assert.ok(!/valley|rain gauges|Paragraph/.test(JSON.stringify(siteStats)), 'stats: the rollup holds no page text');
+assert.equal(JSON.stringify(await worker.evaluate(() => chrome.storage.local.get(null))).includes('siteStats'), false, 'stats never in local storage');
+console.log(`stats: ${statsText.match(/Per block[^A-Z]*/)?.[0]}`);
+await statsPanel.close();
+await page.bringToFront();
+
 // --- Pause with a model: no requests while paused, and a pause mid-page cancels them ---
 const freshPage = (tag) => '<!doctype html><meta charset="utf-8"><title>Pause page (fictional)</title><body>' +
   Array.from({ length: 6 }, (_, i) => `<p>Paragraph ${i + 1} of the ${tag} page, about the hill town bus timetable and its new evening routes, item ${i + 1}.</p>`).join('') +
@@ -607,6 +629,9 @@ await page.waitForTimeout(1500);
 assert.equal(modelCalls, 0, 'paused on this site: the model is never asked');
 assert.equal(await page.$('[data-lpz-id]'), null, 'paused on this site: the page is not even split');
 assert.equal(await anySpark(), null, 'paused on this site: no scoring spark');
+await page.waitForTimeout(800);
+assert.equal((await worker.evaluate(() => chrome.storage.session.get('siteStats'))).siteStats?.sites?.['pause.example'], undefined,
+  'paused on this site: nothing is counted');
 // Resume: scored and zapped as usual.
 await worker.evaluate(() => chrome.storage.local.set({ sites: {} }));
 await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });

@@ -17,6 +17,7 @@ import { lensChanges, validateLens, bumpVersion, withToolFields } from '../core/
 import { pauseScope, pauseLabel } from '../core/pause.js';
 import { HOSTED_PROVIDERS, hostedOrigin, hostedMissing, originPattern } from '../core/hosted.js';
 import { IN_BROWSER_MODEL, MODEL_ORIGINS } from '../core/in-browser.js';
+import { formatMs } from '../core/metrics.js';
 
 const $ = (id) => document.getElementById(id);
 const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
@@ -78,6 +79,7 @@ async function retarget() {
     tabId = t?.id ?? null;
   }
   page = await pageAction('get');
+  pageAt = Date.now();
   await reloadState();
   renderAll();
 }
@@ -97,10 +99,12 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   const hostChanged = page?.host !== msg.page.host;
   const labelsChanged = JSON.stringify(page?.labelled) !== JSON.stringify(msg.page.labelled);
   page = msg.page;
+  pageAt = Date.now();
   if (hostChanged) reloadState().then(renderAll);
   else {
     renderHeader();
     if (ui.tab === 'ledger') renderLedger();
+    if (ui.tab === 'stats') renderStatsSoon();
     if (ui.tab === 'train' && labelsChanged) renderTrain();
   }
   return false;
@@ -154,7 +158,7 @@ $('before').addEventListener('click', async () => {
   renderHeader();
 });
 
-const TABS = [['ledger', 'Ledger'], ['interests', 'Interests'], ['train', 'Train'], ['lens', 'Lens'], ['settings', 'Settings']];
+const TABS = [['ledger', 'Ledger'], ['interests', 'Interests'], ['train', 'Train'], ['stats', 'Stats'], ['lens', 'Lens'], ['settings', 'Settings']];
 function renderTabs() {
   $('tabs').replaceChildren(...TABS.map(([key, label]) =>
     h('button', {
@@ -166,7 +170,7 @@ function renderTabs() {
 }
 
 function renderBody() {
-  ({ ledger: renderLedger, interests: renderInterests, train: renderTrain, lens: renderLens, settings: renderSettings })[ui.tab]();
+  ({ ledger: renderLedger, interests: renderInterests, train: renderTrain, stats: renderStats, lens: renderLens, settings: renderSettings })[ui.tab]();
 }
 function renderAll() {
   renderHeader();
@@ -229,6 +233,96 @@ function renderLedger(force = false) {
     parts.push(h('ul', {}, page.restored.map((d) =>
       entry({ ...d, zap: false }, h('button', { text: 'Zap again', on: { click: act('unrestore', { id: d.id }) } })))));
   }
+  setBody(parts);
+}
+
+// --- Stats: timings and counts, this page and this browser session ---------------
+
+let pageAt = 0; // when `page` arrived, to run its time-on-page clock forward
+let statsTimer = null;
+let statsTick = null;
+function renderStatsSoon() {
+  if (statsTimer) return;
+  statsTimer = setTimeout(() => { statsTimer = null; renderStats(); }, 1000);
+}
+
+const num = (n) => Number(n ?? 0).toLocaleString();
+const share = (part, whole) => (whole ? ` (${Math.round((100 * part) / whole)}%)` : '');
+const readTime = (sec) => (sec < 60 ? `${sec} s` : `${Math.round(sec / 60)} min`);
+const speed = (s) => s
+  ? `${formatMs(s.mean)} average · ${formatMs(s.p50)} median · ${formatMs(s.p95)} p95 · ${formatMs(s.max)} slowest`
+  : 'nothing timed yet';
+const kv = (rows) => h('dl', { class: 'kv' }, rows.filter(Boolean).flatMap(([k, v, title, id]) => [h('dt', { text: k, title: title ?? '' }), h('dd', { text: v, ...(id ? { id } : {}) })]));
+const timeOnPage = () => {
+  const m = page?.metrics;
+  return m ? formatMs(m.timeOnPageMs + (m.clockRunning ? Date.now() - pageAt : 0)) : '–';
+};
+
+async function renderStats() {
+  if (ui.tab !== 'stats') {
+    clearInterval(statsTick);
+    statsTick = null;
+    return;
+  }
+  // The time-on-page clock ticks while the tab is open; only its own text changes.
+  statsTick ??= setInterval(() => {
+    if (ui.tab !== 'stats') {
+      clearInterval(statsTick);
+      statsTick = null;
+    } else if ($('time-on-page')) $('time-on-page').textContent = timeOnPage();
+  }, 1000);
+  const roll = await send('site-stats', { host: page?.host ?? '' }).catch(() => null);
+  if (ui.tab !== 'stats') return;
+  const m = page?.metrics;
+  const parts = [];
+  parts.push(h('h3', { text: 'This page' }));
+  if (!page || !m) parts.push(h('p', { class: 'note', text: 'The zapper does not run on this page.' }));
+  else {
+    parts.push(kv([
+      ['Time on page', timeOnPage(), 'While the page was visible and not paused', 'time-on-page'],
+      ['Blocks', `${num(m.blocks)} found · ${num(m.scored)} scored${m.adSlots ? ` · ${num(m.adSlots)} ad slots` : ''}`],
+      ['Hidden', `${num(m.hidden)}${share(m.hidden, m.blocks)} · about ${readTime(m.hiddenReadingSec)} of reading`],
+      ['Per block', speed(m.perBlock), 'Time from asking to answer, per block the scorer judged (cache hits not included)'],
+      ['First screen judged', m.firstScreenMs == null ? '–' : formatMs(m.firstScreenMs), 'From LensZap starting on the page until every block on the first screen had an answer'],
+      ['Page judged', m.pageMs == null ? '–' : formatMs(m.pageMs), 'Until nothing near the screen was left to score (blocks further down are scored as you scroll)'],
+      ['From cache', `${num(m.fromCache)}${share(m.fromCache, m.scored)}`, 'Scored before in this browser session, so the model was not asked again'],
+      m.gated ? ['Settled in-browser', `${num(m.gated)}${share(m.gated, m.scored)}`, 'Blocks the in-browser model rated clearly on your lens, so the model was not asked'] : null,
+      m.requests ? ['Requests', `${num(m.requests)}${m.failed ? ` · ${num(m.failed)} failed` : ''}`] : null
+    ]));
+    if (page.paused) parts.push(h('p', { class: 'note', text: 'Paused: nothing is counted or timed until you resume.' }));
+  }
+  const rollup = (title, e) => {
+    parts.push(h('h3', { text: title }));
+    if (!e || !e.pages) {
+      parts.push(h('p', { class: 'note', text: 'Nothing scored yet.' }));
+      return;
+    }
+    parts.push(kv([
+      ['Pages', num(e.pages)],
+      ['Time on pages', formatMs(e.visibleMs)],
+      ['Hidden', `${num(e.hidden)} of ${num(e.scored)} scored${share(e.hidden, e.scored)} · about ${readTime(e.hiddenReadingSec)} of reading`],
+      ['Per block', speed(e.perBlock)],
+      ['First screen judged', e.firstScreen ? `${formatMs(e.firstScreen.mean)} average · ${formatMs(e.firstScreen.p95)} p95` : '–'],
+      ['From cache', `${num(e.fromCache)}${share(e.fromCache, e.scored)}`],
+      e.gated ? ['Settled in-browser', `${num(e.gated)}${share(e.gated, e.scored)}`] : null,
+      e.failed ? ['Failed requests', num(e.failed)] : null
+    ]));
+  };
+  if (page?.host) rollup(`${page.host}, this session`, roll?.site);
+  rollup('All sites, this session', roll?.all);
+  if (roll?.sites?.length > 1) {
+    parts.push(h('h3', { text: 'Sites hiding the most' }));
+    parts.push(h('table', { class: 'sites' },
+      h('thead', {}, h('tr', {}, h('th', { text: 'Site' }), h('th', { text: 'Pages' }), h('th', { text: 'Hidden' }), h('th', { text: 'Median' }))),
+      h('tbody', {}, roll.sites.map((r) => h('tr', {},
+        h('td', { text: r.host }), h('td', { text: num(r.pages) }), h('td', { text: `${num(r.hidden)}${share(r.hidden, r.scored)}` }), h('td', { text: formatMs(r.p50) }))))));
+  }
+  parts.push(h('p', { class: 'note', text: 'Counted in this browser only and kept in memory: forgotten when the browser closes, never written to your lens, never sent anywhere. Nothing is counted while paused or in incognito windows. Reading time assumes 238 words a minute.' }));
+  parts.push(h('div', { class: 'actions' }, h('button', {
+    class: 'danger',
+    text: 'Reset session stats',
+    on: { click: async () => { await send('site-stats-clear'); renderStats(); } }
+  })));
   setBody(parts);
 }
 
