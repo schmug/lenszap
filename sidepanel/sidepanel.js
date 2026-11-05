@@ -689,7 +689,7 @@ function renderSettings(message) {
   const inBrowserSection = (withGate) => h('div', {},
     h('h3', { text: 'In-browser model' }),
     h('p', { class: 'note', text: `${IN_BROWSER_MODEL}, a small model LensZap runs itself on your graphics card, with no model server. It scores a block in about 30 ms. Page text stays in this browser.` }),
-    withGate ? h('label', { class: 'check' }, gateBox, ` Ask it first, and send only the blocks it flags (at least ${pct(ib.gateAt ?? 0.2)} off your lens) to the model above`) : null,
+    withGate ? h('label', { class: 'check' }, gateBox, ` Ask it first, and send only the blocks it flags (at least ${pct(ib.gateAt ?? 0.1)} off your lens) to the model above`) : null,
     withGate ? h('p', { class: 'note', text: 'In our tests the model above then saw about 7% of blocks, roughly 12 times faster, with one more block kept that should have gone. Only for blocks that match a “less of this” interest: with “also hide blocks that match none of my interests” on, nearly every block still goes to the model.' }) : null,
     ibButtons,
     ibStatus);

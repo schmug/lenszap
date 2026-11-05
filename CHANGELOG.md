@@ -17,9 +17,15 @@ include a breaking change; it says so here.
   **Delete the model**. It scores a block in about 30 ms.
 - **Ask it first.** With a local or hosted model, "Ask it first" lets the
   in-browser model score every block and sends only the blocks it rates at
-  least 20% off your lens on to that model. In the eval this sent about 7% of
-  blocks to Kev-4B, roughly 12× faster, for one more should-go block kept. If
-  the in-browser model fails, every block goes to the model as before.
+  least 10% off your lens on to that model. On real front pages (Ars
+  Technica, The Verge, Hacker News) Kev-4B got 4–8 requests a page instead of
+  12–30, with the same blocks hidden. If the in-browser model fails, every
+  block goes to the model as before.
+- **Fix: pages that re-render after scoring.** When scores arrived before a
+  site swapped in new nodes for blocks (hydration), the ledger check failed
+  and every hidden block came back for the rest of the visit. Blocks the page
+  has taken out are now forgotten before each pass, and their replacements
+  are judged afresh. Fast scorers and a warm score cache made this common.
 - The extension now ships transformers.js and onnxruntime-web, unmodified, in
   `vendor/` (see vendor/README.md), and asks for the `offscreen` permission to
   run them. They load only in the in-browser scorer's own page.

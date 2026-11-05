@@ -9,6 +9,9 @@
 //     off-lens go on to the model. The rest are kept, scored by it. In the eval
 //     (2026-11-05, 538 labelled blocks, default mode) a 20% gate sent 7% of
 //     blocks to Kev-4B, about 12× faster, for one more should-go block kept.
+//     On real front pages a 20% gate kept back a block Kev would have hidden
+//     (the model rated it 17%); at 10% Kev saw every block it hides there,
+//     with 4–7 requests per page instead of 12–30. So the default is 10%.
 //
 // The model files are downloaded once, only when the reader asks, from
 // Hugging Face into the extension's Cache Storage. Nothing else about the
@@ -18,7 +21,7 @@ import { offLensConfidence } from './decide.js';
 
 export const IN_BROWSER_MODEL = 'Xenova/nli-deberta-v3-small';
 export const IN_BROWSER_REVISION = 'main';
-export const DEFAULT_IN_BROWSER = Object.freeze({ gate: false, gateAt: 0.2 });
+export const DEFAULT_IN_BROWSER = Object.freeze({ gate: false, gateAt: 0.1 });
 export const IN_BROWSER_MAX_CHARS = 1500;
 export const MODEL_CACHE = 'lenszap-models';
 

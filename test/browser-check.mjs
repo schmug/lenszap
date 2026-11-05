@@ -765,6 +765,32 @@ await worker.evaluate(() => chrome.storage.local.set({ sites: {} }));
 holdServer.close();
 console.log('hold: blank until scored, shown by 3 s on a silent model, never on a paused site');
 
+// --- A page that swaps its nodes after they are scored ---------------------------
+// Sites re-render while they hydrate. When scores land before the swap (a warm
+// score cache, a fast scorer), the ledger must forget the detached blocks, not
+// fail and restore everything.
+await page.goto('about:blank');
+await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
+  threshold: 0.8, scorer: 'model', hideUnmatched: true, model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in-swap', concurrency: 2 }
+});
+await page.goto(pageUrl);
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
+await settle();
+const beforeSwap = (await zappedTexts()).length;
+const swapped = await page.evaluate(() => {
+  const el = document.querySelector('[data-lpz-zapped]');
+  const fresh = el.cloneNode(true);
+  for (const n of [fresh, ...fresh.querySelectorAll('*')]) for (const a of [...n.attributes]) if (a.name.startsWith('data-lpz-')) n.removeAttribute(a.name);
+  el.replaceWith(fresh);
+  return fresh.textContent.replace(/\s+/g, ' ').trim().slice(0, 40);
+});
+// A settings write makes the content script re-apply at once, before its scan sees the swap.
+await worker.evaluate(() => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({ settings: { ...settings, swapProbe: Date.now() } })));
+await page.waitForFunction((t) => [...document.querySelectorAll('[data-lpz-zapped]')].some((e) => e.textContent.replace(/\s+/g, ' ').includes(t)), swapped, { timeout: 10000 });
+await settle();
+assert.equal((await zappedTexts()).length, beforeSwap, 'a swapped-in node is judged again, and nothing else is restored');
+console.log(`node swap after scoring: ${beforeSwap} hidden before and after; the replacement was zapped again`);
+
 // --- In-browser model (core/in-browser.js) ------------------------------------
 // With "ask it first" on but no model downloaded, the gate fails open: every
 // block still goes to the model, and the page is scored as without it.
@@ -781,7 +807,7 @@ const ibSettings = (patch) => ({
   threshold: 0.65, scorer: 'model', hideUnmatched: false,
   // Its own model name, so blocks scored earlier in this check are not in the score cache.
   model: { api: 'systemone', endpoint: modelEndpoint, model: `stand-in-ib-${ibRun++}`, concurrency: 2 },
-  inBrowser: { gate: true, gateAt: 0.2 }, ...patch
+  inBrowser: { gate: true, gateAt: 0.1 }, ...patch
 });
 await page.goto('about:blank');
 await worker.evaluate((settings) => chrome.storage.local.set({ settings }), ibSettings({}));

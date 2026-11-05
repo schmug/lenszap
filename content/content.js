@@ -239,6 +239,25 @@
     return ids;
   }
 
+  /**
+   * Forget blocks the page has taken out of the document (a site re-rendering
+   * while it hydrates). Their replacements carry no block id, so the next scan
+   * registers them afresh. A detached block can't be seen, so it is never in
+   * the ledger: without this, scores that arrive before the swap leave the
+   * ledger naming blocks the page no longer has, and everything is restored.
+   */
+  function prune() {
+    for (const [id, b] of blocks) {
+      if (!b.els.some((el) => el.isConnected)) {
+        blocks.delete(id);
+        scores.delete(id);
+        restored.delete(id);
+        labels.delete(id);
+        adSlots.delete(id);
+      }
+    }
+  }
+
   /** Find new blocks; returns their ids. Blocks already registered are kept. */
   function scan() {
     // An ad slot that has since filled with text (stories loaded into it) is not
@@ -250,15 +269,7 @@
         blocks.delete(id); scores.delete(id); adSlots.delete(id);
       }
     }
-    for (const [id, b] of blocks) {
-      if (!b.els.some((el) => el.isConnected)) {
-        blocks.delete(id);
-        scores.delete(id);
-        restored.delete(id);
-        labels.delete(id);
-        adSlots.delete(id);
-      }
-    }
+    prune();
     const added = [];
     if (rule) {
       for (const item of document.querySelectorAll(rule.item)) {
@@ -544,6 +555,7 @@
   }
 
   function apply() {
+    prune();
     const scored = [...blocks.keys()].filter((id) => scores.has(id)).map((id) => scores.get(id));
     // Paused: nothing is decided, so nothing is hidden (zapped blocks come
     // back without animation) and the ledger is empty.
