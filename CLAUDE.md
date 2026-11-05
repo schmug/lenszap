@@ -27,6 +27,7 @@ npm run eval             # eval/run.mjs — wrong-zap / miss / ad / evidence / b
 npm run compare-models   # eval/compare-models.mjs — the eval once per llama-server decision model, with speed and memory
 npm run history-lens     # eval/history-lens.mjs — spike: history → topic groups → weights table → lens + capture list; 3D map (local only)
 npm run browser-scorer -- --kind nli|embed|webllm --model ID   # eval/browser-scorer.mjs — WebGPU in-browser model on 127.0.0.1:8283 (spike; libs via npm install --no-save)
+npm run two-pass -- --fast ID --slow ID   # eval/two-pass.mjs — fast-then-Kev combinations from cached scores (--list for ids)
 npm run dev -- --site X  # scripts/dev.mjs — offline dev browser with the extension; reloads it on every save
 npm run test:watch       # npm test's unit tests, re-run on save
 npm version patch|minor|major   # bump package.json, lock, and manifest.json together (no commit/tag)
