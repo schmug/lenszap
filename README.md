@@ -236,6 +236,8 @@ npm run compare-models -- --models ggml-org/Kev-4B-GGUF --browser nli:Xenova/nli
 
 The first run (2026-11-04, Apple M4 Max, 538 labelled blocks, 65%, default mode) found nothing that beats Kev-4B yet, but a small model is 40× faster. Kev-4B hid 1 wanted block and kept 10 of 18 should-go blocks at 1.3 s per block. `Xenova/nli-deberta-v3-small` hid 2 and kept 12, at 30 ms per block. `Xenova/bge-small-en-v1.5` with its query prefix hid none at 70% and kept 13, at 9 ms per block. The WebLLM chat models (Qwen2.5 0.5B and 1.5B, Qwen3 1.7B) left 25–65% of blocks unscored, because they drop passage ids from a 12-block batch, so they are not usable as is. Headless Chromium on macOS had no fp16 WebGPU adapter, so the run used `--headed`. No run made a request outside the machine.
 
+`npm run two-pass -- --fast ID --slow ID` simulates two passes from cached scores (`--list` shows the ids): the fast scorer hides what it is sure of early, or gates which blocks the slow one is asked about. On the same pages in default mode, nli-deberta-v3-small as a gate at 20% sent only 7% of blocks to Kev-4B, which is about 104 ms per block instead of 1.27 s, for 0 wanted hidden and 11 of 18 should-go kept (Kev alone: 1 and 10). bge-small with its query prefix at 70% hid 5 of Kev's 8 correct zaps before Kev answered, with no wanted block hidden even briefly. Neither helps in hide-unmatched mode, where almost every block needs Kev.
+
 ## Troubleshooting
 
 **Settings → Troubleshooting → Copy debug report** (or **Save as file**) produces a JSON report of the current tab. It has:
