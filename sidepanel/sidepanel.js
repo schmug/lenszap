@@ -16,6 +16,7 @@ import { suggest, MIN_EXAMPLES } from '../core/train.js';
 import { lensChanges, validateLens, bumpVersion, withToolFields } from '../core/lens-edit.js';
 import { pauseScope, pauseLabel } from '../core/pause.js';
 import { HOSTED_PROVIDERS, hostedOrigin, hostedMissing, originPattern } from '../core/hosted.js';
+import { IN_BROWSER_MODEL, MODEL_ORIGINS } from '../core/in-browser.js';
 
 const $ = (id) => document.getElementById(id);
 const send = (type, data = {}) => chrome.runtime.sendMessage({ type, ...data });
@@ -588,6 +589,7 @@ function renderSettings(message) {
       renderSettings({
         model: 'Using a model on this machine. Check the connection below.',
         hosted: 'Using a hosted model. Until it is set up below, nothing is scored.',
+        browser: 'Using the in-browser model. Until it is downloaded below, nothing is scored.',
         lexical: 'Using the word-only scorer.'
       }[value]);
     });
@@ -634,6 +636,64 @@ function renderSettings(message) {
     const fmt = (s) => (s.unscored ? 'no answer' : pct(s.matches['school cybersecurity']));
     say(`${r.scorer} answered in ${r.ms} ms. A ransomware story scored ${fmt(a)} for “school cybersecurity”; a football story scored ${fmt(b)}.`);
   };
+
+  // --- The in-browser model (core/in-browser.js, offscreen/scorer.js) ---
+  const ibStatus = h('div', { class: 'status', role: 'status' });
+  const ibSay = (text, kind = 'ok') => ibStatus.replaceChildren(h('div', { class: kind, text }));
+  const ibButtons = h('div', { class: 'actions' });
+  const mb = (n) => `${Math.round(n / 1e6)} MB`;
+  const ibRefresh = async (note) => {
+    const r = await send('ib-status');
+    if (r?.error) { ibSay(`The in-browser scorer could not start: ${r.error}`, 'error'); return; }
+    const where = r.webgpu ? `WebGPU${r.architecture ? ` (${r.vendor} ${r.architecture})` : ''}` : 'no WebGPU here, so the CPU (much slower)';
+    ibSay(note ?? (r.downloaded
+      ? `${IN_BROWSER_MODEL} is downloaded (${mb(r.bytes)}, ${r.dtype}). Runs on ${where}.`
+      : `Not downloaded. It is about ${r.f16 ? 280 : 570} MB, fetched once from huggingface.co and kept in this browser. Runs on ${where}.`));
+    ibButtons.replaceChildren(
+      r.downloaded ? null : h('button', { class: 'primary', text: 'Download', on: { click: ibDownload } }),
+      r.downloaded ? h('button', { text: 'Test', on: { click: ibTest } }) : null,
+      r.downloaded ? h('button', { class: 'danger', text: 'Delete the model', on: { click: async () => { await send('ib-delete'); ibRefresh('Deleted.'); } } }) : null);
+  };
+  const ibDownload = async () => {
+    // Asked on the click, and given back when the download ends.
+    const ok = await chrome.permissions.request({ origins: MODEL_ORIGINS }).catch(() => false);
+    if (!ok) { ibSay('Not downloaded: access to huggingface.co was not allowed.', 'error'); return; }
+    ibButtons.replaceChildren();
+    ibSay('Downloading…');
+    const onProgress = (msg) => {
+      if (msg?.type !== 'ib-progress') return false;
+      ibSay(`Downloading ${msg.file} (${msg.index + 1} of ${msg.files}): ${mb(msg.loaded)}${msg.total ? ` of ${mb(msg.total)}` : ''}`);
+      return false;
+    };
+    chrome.runtime.onMessage.addListener(onProgress);
+    const r = await send('ib-download');
+    chrome.runtime.onMessage.removeListener(onProgress);
+    if (r?.error) { ibSay(`Download failed: ${r.error}`, 'error'); ibRefresh(`Download failed: ${r.error}`); return; }
+    ibRefresh();
+  };
+  const ibTest = async () => {
+    ibSay('Testing… the first run loads the model, which takes a few seconds.');
+    const r = await send('ib-test');
+    if (r?.error) { ibSay(`Failed: ${r.error}`, 'error'); return; }
+    const [a, b] = r.scores;
+    const fmt = (x) => (x?.unscored ? 'no answer' : pct(x.matches['school cybersecurity']));
+    ibSay(`Answered in ${r.ms} ms. A ransomware story scored ${fmt(a)} for “school cybersecurity”; a football story scored ${fmt(b)}.`);
+  };
+  const ib = st.inBrowser ?? {};
+  const gateBox = h('input', { type: 'checkbox' });
+  gateBox.checked = ib.gate === true;
+  gateBox.addEventListener('change', async () => {
+    state.settings = (await send('set-settings', { patch: { inBrowser: { gate: gateBox.checked } } })).settings;
+    renderSettings(gateBox.checked ? 'The in-browser model now goes first.' : 'Every block goes to the model again.');
+  });
+  const inBrowserSection = (withGate) => h('div', {},
+    h('h3', { text: 'In-browser model' }),
+    h('p', { class: 'note', text: `${IN_BROWSER_MODEL}, a small model LensZap runs itself on your graphics card, with no model server. It scores a block in about 30 ms. Page text stays in this browser.` }),
+    withGate ? h('label', { class: 'check' }, gateBox, ` Ask it first, and send only the blocks it flags (at least ${pct(ib.gateAt ?? 0.2)} off your lens) to the model above`) : null,
+    withGate ? h('p', { class: 'note', text: 'In our tests the model above then saw about 7% of blocks, roughly 12 times faster, with one more block kept that should have gone. Only for blocks that match a “less of this” interest: with “also hide blocks that match none of my interests” on, nearly every block still goes to the model.' }) : null,
+    ibButtons,
+    ibStatus);
+  ibRefresh();
 
   // --- Hosted model, bring your own key (core/hosted.js) ---
   const hs = st.hosted ?? {};
@@ -811,7 +871,8 @@ function renderSettings(message) {
     h('fieldset', {},
       scorer('lexical', 'Words only (no model; zaps too much on real pages)'),
       scorer('model', 'A model running on this machine'),
-      scorer('hosted', 'A hosted model with my own key (sends page text to that provider)')),
+      scorer('hosted', 'A hosted model with my own key (sends page text to that provider)'),
+      scorer('browser', 'The in-browser model (no model server; a one-time download)')),
     st.scorer === 'model' ? h('div', {},
       h('label', { class: 'field' }, 'API', api),
       h('label', { class: 'field' }, 'Endpoint', endpoint),
@@ -821,7 +882,8 @@ function renderSettings(message) {
       h('div', { class: 'actions' },
         h('button', { text: 'Save', on: { click: async () => { if (await saveModel()) say('Saved.'); } } }),
         h('button', { class: 'primary', text: 'Test connection', on: { click: test } })),
-      status) : null,
+      status,
+      inBrowserSection(true)) : null,
     st.scorer === 'hosted' ? h('div', {},
       h('p', { class: 'note warn', text: 'While this is on, the text of each block on the pages you open (up to 1,500 characters each) is sent to the provider you pick, with your key. Your interest topics go with them (not their weights). Nothing else is sent: no page addresses, no history. Pausing sends nothing. Your key stays in this browser and is never exported.' }),
       h('label', { class: 'field' }, 'Provider', provider),
@@ -835,7 +897,9 @@ function renderSettings(message) {
         h('button', { text: 'Save', on: { click: async () => { if (await saveHosted()) renderSettings('Saved.'); } } }),
         h('button', { class: 'primary', text: 'Test connection', on: { click: testHosted } }),
         state.hostedKeys?.[provider.value] ? h('button', { class: 'danger', text: 'Forget key', on: { click: forgetKey } }) : null),
-      status) : null,
+      status,
+      inBrowserSection(true)) : null,
+    st.scorer === 'browser' ? inBrowserSection(false) : null,
 
     h('h3', { text: 'Troubleshooting' }),
     h('p', { class: 'note', text: 'A report of this page: settings, model timings and errors, and every block’s scores and reasoning. Nothing is sent anywhere; copy it or save it and share it yourself.' }),

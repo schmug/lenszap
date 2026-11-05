@@ -22,6 +22,10 @@
 // leaves the device. The other fetch() here loads the bundled sample lens
 // from the extension's own package.
 //
+// The in-browser scorer (core/in-browser.js, offscreen/scorer.js) runs a model
+// inside the extension and makes no requests, except the one-time download of
+// its model files from Hugging Face, which the reader starts in Settings.
+//
 // The exception the reader opts into: the hosted scorer (core/hosted.js), with
 // the reader's own key. Block text then goes to that one provider, over https,
 // only after the reader granted its host in Settings, never on a site they
@@ -30,12 +34,14 @@
 import { commitDraft, commitEdit, validateLens, unsupportedFeatures } from '../core/lens-edit.js';
 import { scoreWithEndpoint, modelScorerId } from '../core/model-scorer.js';
 import { badgeFor, isPausedOn } from '../core/pause.js';
+import { DEFAULT_IN_BROWSER, MODEL_ORIGINS, inBrowserMode, inBrowserScorerId, gateSplit } from '../core/in-browser.js';
+import { looksLikeEvidence } from '../core/lexical-scorer.js';
 import { DEFAULT_HOSTED, hostedTarget, hostedOrigin, hostedScorerId, effectiveScorer, withRetry, HOSTED_PROVIDERS } from '../core/hosted.js';
 
 // Default zap threshold per scorer. The word-only scorer's confidence is coarse,
 // so it waits for 80%. For a model, the first eval (Kev-4B, 508 labelled
 // blocks) found 60-65% the best balance: 80% left over half of what should go.
-const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65, hosted: 0.65 };
+const DEFAULT_THRESHOLD = { lexical: 0.8, model: 0.65, hosted: 0.65, browser: 0.65 };
 
 const DEFAULT_SETTINGS = {
   threshold: DEFAULT_THRESHOLD.lexical,
@@ -57,7 +63,11 @@ const DEFAULT_SETTINGS = {
   model: { api: 'systemone', endpoint: 'http://127.0.0.1:8080', model: '', concurrency: 4 },
   // Hosted scorer, bring your own key (core/hosted.js). Used only when
   // scorer is 'hosted'. The key is kept apart, in hostedKeys.
-  hosted: DEFAULT_HOSTED
+  hosted: DEFAULT_HOSTED,
+  // The in-browser model (core/in-browser.js): scorer 'browser' uses it alone;
+  // gate: true puts it in front of the local or hosted model, which then sees
+  // only the blocks it rates at least gateAt off-lens.
+  inBrowser: DEFAULT_IN_BROWSER
 };
 
 async function bundledLens() {
@@ -74,7 +84,8 @@ async function load() {
       ...DEFAULT_SETTINGS,
       ...(s.settings ?? {}),
       model: { ...DEFAULT_SETTINGS.model, ...(s.settings?.model ?? {}) },
-      hosted: { ...DEFAULT_SETTINGS.hosted, ...(s.settings?.hosted ?? {}) }
+      hosted: { ...DEFAULT_SETTINGS.hosted, ...(s.settings?.hosted ?? {}) },
+      inBrowser: { ...DEFAULT_SETTINGS.inBrowser, ...(s.settings?.inBrowser ?? {}) }
     },
     sites: s.sites ?? {}
   };
@@ -158,18 +169,85 @@ async function activeModel(settings) {
 }
 
 // Settings without anything secret, for the cache key and errors.
-const scorerOnly = (settings) => (settings.scorer === 'hosted' ? hostedTargetId(settings) : settings.model);
+const IB = { api: 'in-browser', endpoint: 'in-browser', model: '', concurrency: 2, scorerId: inBrowserScorerId() };
+const scorerOnly = (settings) => (settings.scorer === 'browser' ? IB : settings.scorer === 'hosted' ? hostedTargetId(settings) : settings.model);
+// The id a page sees: with the gate on, the model's id plus the gate, so
+// turning the gate on or off rescores the page.
+const pageScorerId = (settings) => {
+  const id = modelScorerId(scorerOnly(settings));
+  return inBrowserMode(settings) === 'gate' ? `${id} after ${IB.scorerId} at ${Math.round(settings.inBrowser.gateAt * 100)}%` : id;
+};
+
+// --- The in-browser model (offscreen/scorer.js) --------------------------------
+let offscreenReady = null;
+function ensureOffscreen() {
+  offscreenReady ??= (async () => {
+    if (await chrome.offscreen.hasDocument?.()) return;
+    await chrome.offscreen.createDocument({
+      url: 'offscreen/scorer.html',
+      reasons: ['WORKERS'],
+      justification: 'Runs the in-browser scoring model on WebGPU, which the reader turned on.'
+    });
+  })().catch((err) => {
+    // "Only a single offscreen document" means it is already open.
+    if (!/single offscreen/i.test(String(err?.message))) throw err;
+  }).finally(() => { offscreenReady = null; });
+  return offscreenReady;
+}
+async function offscreen(msg) {
+  await ensureOffscreen();
+  const res = await chrome.runtime.sendMessage({ ...msg, target: 'offscreen' });
+  if (res?.error) throw new Error(res.error);
+  return res;
+}
+
+/** In-browser scores for blocks, from the score cache or the model. */
+async function inBrowserScores(blocks, topics) {
+  await loadCache();
+  const out = new Map();
+  const todo = [];
+  for (const b of blocks) {
+    const hit = scoreCache.get(cacheKey(IB, topics, b.text));
+    if (hit) out.set(b.id, { ...hit, id: b.id });
+    else todo.push(b);
+  }
+  if (todo.length) {
+    const { scores } = await offscreen({ type: 'ib-score', blocks: todo, topics });
+    scores.forEach((r, i) => {
+      // The same guard as the model scorer: the word-level evidence check also counts.
+      const sc = !r.evidence && looksLikeEvidence(todo[i].text) ? { ...r, evidence: true } : r;
+      out.set(sc.id, sc);
+      if (!sc.unscored) {
+        if (scoreCache.size >= CACHE_LIMIT) scoreCache.delete(scoreCache.keys().next().value);
+        const { id, ...score } = sc;
+        scoreCache.set(cacheKey(IB, topics, todo[i].text), score);
+      }
+    });
+    saveCacheSoon();
+  }
+  return blocks.map((b) => out.get(b.id));
+}
 const hostedTargetId = (settings) => {
   const p = HOSTED_PROVIDERS[settings.hosted.provider];
   const model = settings.hosted.model || p?.defaultModel || 'default';
   return { api: p?.api ?? 'hosted', model, endpoint: p?.label ?? 'hosted', scorerId: hostedScorerId(settings.hosted) };
 };
 
-async function scoreWithModel(blocks, topics, host = null) {
+async function scoreWithModel(blocks, topics, host = null, priorities = null) {
   const { settings, sites } = await load();
   if (host != null && isPausedOn(settings, sites, host)) return { paused: true, scores: [] };
   // A site kept off the hosted model sends nothing, even if a page asks.
   if (host != null && effectiveScorer(settings, sites[host]) === 'none') return { scores: [], scorer: 'none' };
+  const mode = inBrowserMode(settings);
+  if (mode === 'only') {
+    const t0 = Date.now();
+    try {
+      return { scores: await inBrowserScores(blocks, topics), scorer: IB.scorerId };
+    } catch (err) {
+      noteError(IB, err, Date.now() - t0, blocks.length);
+      throw err;
+    }
+  }
   const id = scorerOnly(settings);
   let m;
   try {
@@ -181,11 +259,29 @@ async function scoreWithModel(blocks, topics, host = null) {
   const fetchFn = m.hosted ? withRetry((u, i) => fetch(u, i)) : (u, i) => fetch(u, i);
   await loadCache();
   const results = new Map();
-  const todo = [];
+  let todo = [];
   for (const b of blocks) {
     const hit = scoreCache.get(cacheKey(m, topics, b.text));
     if (hit) results.set(b.id, { ...hit, id: b.id });
     else todo.push(b);
+  }
+  // The gate: the in-browser model scores first; blocks it rates clearly on
+  // your lens keep its score and never reach the model. If it fails, every
+  // block goes to the model, as without the gate.
+  if (mode === 'gate' && todo.length && Array.isArray(priorities) && priorities.length) {
+    const g0 = Date.now();
+    try {
+      const ib = await inBrowserScores(todo, topics);
+      const threshold = (host != null ? sites[host]?.threshold : undefined) ?? settings.threshold;
+      const { keep } = gateSplit(ib, priorities, { gateAt: settings.inBrowser.gateAt, threshold, hideUnmatched: settings.hideUnmatched === true });
+      const kept = new Set(keep);
+      for (const s of ib) if (kept.has(s.id)) results.set(s.id, s);
+      todo = todo.filter((b) => !kept.has(b.id));
+    } catch (err) {
+      noteError(IB, err, Date.now() - g0, todo.length);
+    }
+    const now = await load();
+    if (host != null && isPausedOn(now.settings, now.sites, host)) return { paused: true, scores: [] };
   }
   const t0 = Date.now();
   const ctl = new AbortController();
@@ -209,7 +305,7 @@ async function scoreWithModel(blocks, topics, host = null) {
     }
   });
   if (fresh.length) saveCacheSoon();
-  return { scores: blocks.map((b) => results.get(b.id)), scorer: modelScorerId(m) };
+  return { scores: blocks.map((b) => results.get(b.id)), scorer: mode === 'gate' ? pageScorerId(settings) : modelScorerId(m) };
 }
 
 // The toolbar badge: a count of hidden blocks, or ‖ in grey while paused.
@@ -241,7 +337,12 @@ const handlers = {
       settings: st.settings,
       site,
       // What scores this site, without secrets: the page paces its requests by it.
-      scoring: { scorer, api: sc.api, concurrency: (st.settings.scorer === 'hosted' ? st.settings.hosted : st.settings.model).concurrency ?? 4, id: modelScorerId(sc) },
+      scoring: {
+        scorer,
+        api: sc.api,
+        concurrency: (st.settings.scorer === 'browser' ? IB : st.settings.scorer === 'hosted' ? st.settings.hosted : st.settings.model).concurrency ?? 4,
+        id: pageScorerId(st.settings)
+      },
       unsupported: unsupportedFeatures(st.lens)
     };
   },
@@ -269,7 +370,10 @@ const handlers = {
 
   async 'set-settings'({ patch }) {
     const { settings } = await load();
-    const next = { ...settings, ...patch, model: { ...settings.model, ...(patch.model ?? {}) }, hosted: { ...settings.hosted, ...(patch.hosted ?? {}) } };
+    const next = { ...settings, ...patch, model: { ...settings.model, ...(patch.model ?? {}) }, hosted: { ...settings.hosted, ...(patch.hosted ?? {}) }, inBrowser: { ...settings.inBrowser, ...(patch.inBrowser ?? {}) } };
+    const g = Number(next.inBrowser.gateAt);
+    next.inBrowser.gateAt = Number.isFinite(g) ? Math.min(0.9, Math.max(0.05, g)) : DEFAULT_IN_BROWSER.gateAt;
+    next.inBrowser.gate = next.inBrowser.gate === true;
     // Switching scorer moves the threshold to the new scorer's default, unless
     // the reader had already moved it away from the old one's.
     if (patch.scorer && patch.scorer !== settings.scorer && patch.threshold === undefined &&
@@ -370,16 +474,25 @@ const handlers = {
   },
 
   // Scores already cached for these blocks; blocks not in the cache are left out.
-  async 'cached-scores'({ blocks, topics }) {
+  async 'cached-scores'({ blocks, topics, priorities }) {
     await loadCache();
     const { settings } = await load();
     const scores = [];
     const m = scorerOnly(settings);
+    const gate = inBrowserMode(settings) === 'gate' && Array.isArray(priorities) && priorities.length;
     for (const b of blocks) {
       const hit = scoreCache.get(cacheKey(m, topics, b.text));
-      if (hit) scores.push({ ...hit, id: b.id });
+      if (hit) {
+        scores.push({ ...hit, id: b.id });
+        continue;
+      }
+      // With the gate, a block the in-browser model kept back is scored too.
+      const ib = gate ? scoreCache.get(cacheKey(IB, topics, b.text)) : null;
+      if (ib && gateSplit([{ ...ib, id: b.id }], priorities, { gateAt: settings.inBrowser.gateAt, threshold: settings.threshold, hideUnmatched: settings.hideUnmatched === true }).keep.length) {
+        scores.push({ ...ib, id: b.id });
+      }
     }
-    return { scores, scorer: modelScorerId(m) };
+    return { scores, scorer: pageScorerId(settings) };
   },
 
   async 'debug-info'() {
@@ -387,8 +500,42 @@ const handlers = {
     return { recentErrors: [...recentErrors], cachedScores: scoreCache.size };
   },
 
-  async 'score-model'({ blocks, topics, host }) {
-    return scoreWithModel(blocks, topics, host ?? null);
+  async 'score-model'({ blocks, topics, host, priorities }) {
+    return scoreWithModel(blocks, topics, host ?? null, priorities ?? null);
+  },
+
+  // The in-browser model: is it downloaded, and does this browser have WebGPU?
+  async 'ib-status'() {
+    return offscreen({ type: 'ib-status' });
+  },
+
+  // Download its files. The side panel asked for MODEL_ORIGINS on the click.
+  async 'ib-download'() {
+    if (!(await chrome.permissions.contains({ origins: MODEL_ORIGINS.slice(0, 1) }))) {
+      return { error: 'LensZap needs access to huggingface.co for the download. Click Download again and allow it.' };
+    }
+    try {
+      return await offscreen({ type: 'ib-download' });
+    } finally {
+      // The access was for the download only.
+      await chrome.permissions.remove({ origins: MODEL_ORIGINS }).catch(() => {});
+    }
+  },
+
+  async 'ib-delete'() {
+    return offscreen({ type: 'ib-delete' });
+  },
+
+  async 'ib-test'() {
+    const t0 = Date.now();
+    const scores = await inBrowserScores(
+      [
+        { id: 't1', text: `The school district restored its systems after a ransomware attack on student records. (${Date.now()})` },
+        { id: 't2', text: `The home team won the football final in extra time. (${Date.now()})` }
+      ],
+      ['school cybersecurity']
+    );
+    return { scorer: IB.scorerId, ms: Date.now() - t0, scores };
   },
 
   async 'test-model'() {

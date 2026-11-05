@@ -83,7 +83,8 @@
   const labels = new Map(); // id → 'keep' | 'zap', marked in training mode on this page
   let decisions = [];
   let decisionById = new Map();
-  // Which scorer runs here: 'lexical', 'model', 'hosted', or 'none' (a site
+  // Which scorer runs here: 'lexical', 'model', 'hosted', 'browser' (the
+  // in-browser model, run by the service worker like a model), or 'none' (a site
   // the reader kept off the hosted model: nothing is scored or sent).
   const scorerKind = () => state.scoring?.scorer ?? state.settings.scorer;
   let scorerId = scorerKind() === 'lexical' ? LEXICAL_SCORER_ID : scorerKind() === 'none' ? 'none (kept off the hosted model)' : 'model (not yet run)';
@@ -391,7 +392,7 @@
     // Blocks scored before (on this page or another, since the browser
     // started) come back from the cache at once, wherever they are on the page.
     const gen = generation;
-    send('cached-scores', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
+    send('cached-scores', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), priorities: priorities() })
       .then((res) => {
         if (gen !== generation || !res?.scores?.length) return;
         scorerId = res.scorer;
@@ -431,7 +432,7 @@
         requestLog.push({ n: ids.length, ms: Math.round(performance.now() - sentAt), ok });
         if (requestLog.length > 200) requestLog.shift();
       };
-      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), host })
+      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), priorities: priorities(), host })
         .then((res) => {
           if (gen !== generation) return;
           // The extension heard about a pause before this page did: no scores,

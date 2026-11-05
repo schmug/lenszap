@@ -1109,5 +1109,48 @@ await test('eval two-pass: early, union, and skip combine a fast and a slow scor
   assert.deepEqual(strict.skip.totals.zapMissed, ['c'], 'skipping a block the fast pass underrated misses it');
 });
 
+await test('in-browser: hypotheses, scores, and the gate', async () => {
+  const ib = await import('../core/in-browser.js');
+  assert.deepEqual(ib.hypotheses(['cybersecurity']), ['This passage is about cybersecurity.', ib.EVIDENCE_HYPOTHESIS]);
+  const s = ib.toScore('b', ['a', 'c'], [0.9, 1.2, 0.7]);
+  assert.deepEqual(s, { id: 'b', matches: { a: 0.9, c: 1 }, evidence: true });
+  assert.equal(ib.toScore('b', ['a'], [0.5]).unscored, true, 'a short answer is unscored');
+  assert.equal(ib.toScore('b', ['a'], [NaN, 0.1]).unscored, true);
+  assert.deepEqual(ib.modelFiles('fp16').at(-1), 'onnx/model_fp16.onnx');
+  assert.deepEqual(ib.modelFiles('fp32').at(-1), 'onnx/model.onnx');
+  assert.equal(ib.remoteFileUrl('config.json'), `https://huggingface.co/${ib.IN_BROWSER_MODEL}/resolve/main/config.json`);
+
+  const priorities = [{ topic: 'security', weight: 1 }, { topic: 'gossip', weight: -0.9 }];
+  const m = (id, security, gossip, extra = {}) => ({ id, matches: { security, gossip }, ...extra });
+  const scores = [m('on', 0.9, 0.05), m('off', 0, 0.8), m('edge', 0, 0.25), m('none', 0, 0, { unscored: true })];
+  const g = ib.gateSplit(scores, priorities, { gateAt: 0.2, threshold: 0.65 });
+  // gossip 0.25 × 0.9 = 0.225 ≥ 0.2: the model decides.
+  assert.deepEqual(g.ask, ['off', 'edge', 'none']);
+  assert.deepEqual(g.keep, ['on']);
+  // The gate never sits above the zap threshold.
+  assert.deepEqual(ib.gateSplit([m('x', 0, 0.3)], priorities, { gateAt: 0.5, threshold: 0.25 }).ask, ['x']);
+  // With unmatched blocks hidden, a block matching nothing goes to the model.
+  assert.deepEqual(ib.gateSplit([m('n', 0, 0)], priorities, { hideUnmatched: true }).ask, ['n']);
+
+  assert.equal(ib.inBrowserMode({ scorer: 'browser' }), 'only');
+  assert.equal(ib.inBrowserMode({ scorer: 'model', inBrowser: { gate: true } }), 'gate');
+  assert.equal(ib.inBrowserMode({ scorer: 'hosted', inBrowser: { gate: true } }), 'gate');
+  assert.equal(ib.inBrowserMode({ scorer: 'lexical', inBrowser: { gate: true } }), 'off');
+  assert.equal(ib.inBrowserMode({ scorer: 'model', inBrowser: { gate: false } }), 'off');
+});
+
+await test('in-browser: the gate matches the eval two-pass skip simulation', async () => {
+  const ib = await import('../core/in-browser.js');
+  const { twoPass } = await import('../eval/two-pass-lib.mjs');
+  const priorities = [{ topic: 'security', weight: 1 }, { topic: 'gossip', weight: -1 }];
+  const fast = [0.05, 0.15, 0.25, 0.5, 0.9].map((g, i) => ({ id: `b${i}`, matches: { security: 0, gossip: g } }));
+  const slow = fast.map((f) => ({ id: f.id, matches: { security: 0, gossip: 0.95 } }));
+  const labels = Object.fromEntries(fast.map((f) => [f.id, 'zap']));
+  const sim = twoPass([{ labels, fast, slow }], { priorities, fastAt: 0.65, slowAt: 0.65, skipBelow: 0.2 });
+  const { ask } = ib.gateSplit(fast, priorities, { gateAt: 0.2, threshold: 0.65 });
+  assert.equal(ask.length, sim.skip.slowCalls);
+  assert.deepEqual(sim.skip.totals.zapMissed.sort(), fast.map((f) => f.id).filter((id) => !ask.includes(id)).sort());
+});
+
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

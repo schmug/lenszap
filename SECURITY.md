@@ -30,6 +30,12 @@ A way to break any of them is a security problem worth reporting.
   interest topics are sent, only to that host, never from a site you keep off
   the hosted model, and never while paused. The key is never sent to pages or
   shown in the side panel or debug reports.
+- **The in-browser model downloads only when you ask.** Its files come from
+  huggingface.co when you click Download in Settings; the access is an
+  optional permission asked for on that click and removed when the download
+  ends. After that it reads only the downloaded files and the libraries
+  shipped in `vendor/` (hash-checked by `npm test`), runs in the extension's
+  own offscreen page, and sends nothing anywhere.
 - **Nothing is deleted from the page.** Zapping hides blocks with a style and
   never removes, rewrites, or reorders nodes, so **Before** and **Show** always
   give back the page as published.

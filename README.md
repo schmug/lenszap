@@ -55,6 +55,7 @@ Zapping is a style change only. Nodes are never removed or rewritten, so **Befor
 | **Words only** (default) | None | Matches your topic words. It's fast and deterministic, but it zaps far too much on real pages, because a block about your topic that never uses its words looks off-lens. The demo page includes one such paragraph on purpose. |
 | **Local decision model** (recommended) | llama.cpp's `llama-server` on this machine | A decision model such as Clef-flash answers one yes/no question per topic for every block, plus one question asking whether the block is a correction or cites a source. It returns calibrated probabilities from a single forward pass, with no text to parse. Moving a slider re-runs only the decision step, never the model. |
 | **Local chat model** | Ollama, LM Studio, or any OpenAI-compatible server | Any instruction-following model, asked to return scores as JSON. It's slower and less calibrated than a decision model, but works with what you may already have installed. |
+| **In-browser model** | One click to download it (a few hundred MB) | A small NLI model LensZap runs itself on WebGPU, about 30 ms a block, with no model server. Less accurate than Kev-4B alone (it kept 12 of 18 should-go blocks against Kev's 10). Best used as the first pass in front of a local or hosted model: "Ask it first" sends only the blocks it flags on to that model. |
 | **Hosted model, your own key** (opt-in) | An account and key with one provider | For speed, or when you can't run a model. **Page text leaves your device**: see below. |
 
 **The local scorers accept only addresses on this machine** (localhost, 127.0.0.1, ::1), so page text never leaves your device ([ADR-0005](https://github.com/schmug/lenspub/blob/main/adr/0005-local-only-default.md)). A block counts as a correction or source if either the model or the word-level check says so.
@@ -351,6 +352,8 @@ The browser check loads the unpacked extension against the fictional fixture pag
 - on a fictional page of tricky layouts (`demo/splitter.html`), a repo card with its stats and Star button is one block, a multi-story card and a "Most read" list split into their stories, a caption joins its paragraph, and tag lines, category lists, and pagers are never blocks;
 - the model-scorer path works over all three APIs (against a stand-in model server), including that a block the model skips stays visible, never sends more requests at once than the setting allows, and draws the scoring spark while the model works.
 - on a long page, a model scores only the blocks near the screen and more as you scroll; the score cache lives in session storage (memory only), holds no page text, and answers a revisit without asking the model again.
+- with "Ask it first" on and no in-browser model downloaded, every block still goes to the model (the gate fails open).
+- with `LENSZAP_IB_MODEL_DIR` set to a downloaded model (`npm run browser-scorer -- --kind nli --model Xenova/nli-deberta-v3-small --download` puts one in `eval/data/models/`), it seeds the extension's model cache and checks the in-browser model on its own and as the gate: fewer blocks reach the model, and the on-topic paragraph and the correction stay. That needs WebGPU, which headless Chromium on macOS lacks, so run it with `--headed`.
 
 The check needs Playwright with Chromium and isn't run in CI.
 
