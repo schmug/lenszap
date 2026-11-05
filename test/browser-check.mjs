@@ -769,6 +769,14 @@ console.log('hold: blank until scored, shown by 3 s on a silent model, never on 
 // With "ask it first" on but no model downloaded, the gate fails open: every
 // block still goes to the model, and the page is scored as without it.
 let ibRun = 0;
+// Scoring is done when the model has had no new request for a second (at most 15 s).
+const modelQuiet = async () => {
+  let last = -1;
+  for (let t = 0; t < 15000 && last !== modelCalls; t += 1000) {
+    last = modelCalls;
+    await page.waitForTimeout(1000);
+  }
+};
 const ibSettings = (patch) => ({
   threshold: 0.65, scorer: 'model', hideUnmatched: false,
   // Its own model name, so blocks scored earlier in this check are not in the score cache.
@@ -780,7 +788,7 @@ await worker.evaluate((settings) => chrome.storage.local.set({ settings }), ibSe
 await worker.evaluate(() => chrome.storage.session.remove('scoreCache'));
 modelCalls = 0;
 await page.goto(pageUrl);
-await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 20000 }).catch(() => {});
+await modelQuiet();
 await settle();
 const ibBlocks = await page.$$eval('[data-lpz-id]', (els) => new Set(els.map((e) => e.getAttribute('data-lpz-id'))).size);
 assert.ok(modelCalls >= ibBlocks - 1, `gate without a downloaded model: every block still reaches the model (${modelCalls} of ${ibBlocks})`);
@@ -833,7 +841,8 @@ if (ibDir) {
   modelCalls = 0;
   const g0 = Date.now();
   await page.goto(pageUrl);
-  await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1500); // the in-browser pass, before any model request
+  await modelQuiet();
   await settle();
   assert.ok(modelCalls < ibBlocks, `gate: the model saw fewer blocks than the page has (${modelCalls} of ${ibBlocks})`);
   assert.equal(await isZapped('incident report'), false, 'gate: the on-topic paragraph stays');

@@ -648,7 +648,7 @@ function renderSettings(message) {
     const where = r.webgpu ? `WebGPU${r.architecture ? ` (${r.vendor} ${r.architecture})` : ''}` : 'no WebGPU here, so the CPU (much slower)';
     ibSay(note ?? (r.downloaded
       ? `${IN_BROWSER_MODEL} is downloaded (${mb(r.bytes)}, ${r.dtype}). Runs on ${where}.`
-      : `Not downloaded. It is about ${r.f16 ? 280 : 570} MB, fetched once from huggingface.co and kept in this browser. Runs on ${where}.`));
+      : `Not downloaded. It is about ${r.f16 ? 290 : 580} MB, fetched once from huggingface.co and kept in this browser. Runs on ${where}.`));
     ibButtons.replaceChildren(
       r.downloaded ? null : h('button', { class: 'primary', text: 'Download', on: { click: ibDownload } }),
       r.downloaded ? h('button', { text: 'Test', on: { click: ibTest } }) : null,
