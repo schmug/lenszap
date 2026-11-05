@@ -11,6 +11,7 @@
 // - every code file carries an SPDX-License-Identifier header.
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,8 +86,23 @@ test('optional host permissions are the hosted providers only, https only', () =
   assert.ok(!(manifest.permissions ?? []).includes('<all_urls>'));
 });
 
-// Code files only; upstream/ holds verbatim LensPub copies, eval/data/ holds captures.
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'upstream']);
+test('vendored libraries are the unmodified npm files listed in vendor/VENDOR.json', () => {
+  const v = JSON.parse(readFileSync(join(root, 'vendor/VENDOR.json'), 'utf8'));
+  const listed = Object.keys(v.files).sort();
+  const onDisk = readdirSync(join(root, 'vendor'), { recursive: true })
+    .map((f) => String(f).split('\\').join('/'))
+    .filter((f) => /\.(m?js|wasm)$/.test(f))
+    .sort();
+  assert.deepEqual(onDisk, listed, 'every vendored code file is listed, and nothing else is there');
+  for (const [file, meta] of Object.entries(v.files)) {
+    const got = createHash('sha256').update(readFileSync(join(root, 'vendor', file))).digest('hex');
+    assert.equal(got, meta.sha256, `vendor/${file} changed; copy it from ${meta.package} again and update VENDOR.json`);
+  }
+});
+
+// Code files only; upstream/ holds verbatim LensPub copies, vendor/ third-party
+// libraries (checked above), eval/data/ holds captures.
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'upstream', 'vendor']);
 const SKIP_PATHS = new Set(['eval/data']);
 const CODE = /\.(m?js|css|html)$/;
 

@@ -1,0 +1,8 @@
+{
+  "note": "Copied unmodified from npm; see vendor/README.md. test/repo-checks.mjs checks these hashes.",
+  "files": {
+    "transformers/transformers.min.js": { "package": "@huggingface/transformers@4.3.1", "from": "dist/transformers.min.js", "license": "Apache-2.0", "sha256": "8d6716d9086f57c30a4bf367dba61b887593573c770c454465e8019b2703e743" },
+    "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs": { "package": "onnxruntime-web@1.31.0-dev.20260914-8d85527a0", "from": "dist/ort-wasm-simd-threaded.asyncify.mjs", "license": "MIT", "sha256": "0966b6105cd936744498aa60df7a22cbd47af3374dbc64a9ab561c08a71e3611" },
+    "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm": { "package": "onnxruntime-web@1.31.0-dev.20260914-8d85527a0", "from": "dist/ort-wasm-simd-threaded.asyncify.wasm", "license": "MIT", "sha256": "49871f5a4409519797e127440868a6d1923339d9185907f301a5b2a1d90af082" }
+  }
+}

@@ -3,7 +3,7 @@
 // End-to-end check of the zapper extension in Chromium, against the fictional
 // fixture page. Not part of CI (it needs a browser); run it by hand:
 //
-//   node test/browser-check.mjs [--screenshots]
+//   node test/browser-check.mjs [--screenshots] [--headed]
 //
 // Needs the `playwright` package and a Chromium it can launch. It serves
 // demo/ on 127.0.0.1, loads the unpacked extension, and checks that the
@@ -40,11 +40,11 @@ await new Promise((r) => server.once('listening', r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/`;
 
 const context = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'lpz-')), {
-  headless: true,
+  headless: !process.argv.includes('--headed'),
   channel: 'chromium', // the full browser in new headless mode; headless_shell cannot load extensions
   viewport: { width: 1280, height: 900 },
   args: [
-    `--disable-extensions-except=${zapperDir}`, `--load-extension=${zapperDir}`,
+    `--disable-extensions-except=${zapperDir}`, `--load-extension=${zapperDir}`, '--enable-unsafe-webgpu',
     // Ordinary (non-loopback) site names served by a local server, for the hold
     // check: the extension's host permissions are loopback only, and the hold
     // must work everywhere else too.
@@ -764,6 +764,130 @@ await setPausedEverywhere(false);
 await worker.evaluate(() => chrome.storage.local.set({ sites: {} }));
 holdServer.close();
 console.log('hold: blank until scored, shown by 3 s on a silent model, never on a paused site');
+
+// --- A page that swaps its nodes after they are scored ---------------------------
+// Sites re-render while they hydrate. When scores land before the swap (a warm
+// score cache, a fast scorer), the ledger must forget the detached blocks, not
+// fail and restore everything.
+await page.goto('about:blank');
+await worker.evaluate((settings) => chrome.storage.local.set({ settings }), {
+  threshold: 0.8, scorer: 'model', hideUnmatched: true, model: { api: 'systemone', endpoint: modelEndpoint, model: 'stand-in-swap', concurrency: 2 }
+});
+await page.goto(pageUrl);
+await page.waitForFunction(() => document.querySelectorAll('[data-lpz-zapped]').length > 0, null, { timeout: 15000 });
+await settle();
+const beforeSwap = (await zappedTexts()).length;
+const swapped = await page.evaluate(() => {
+  const el = document.querySelector('[data-lpz-zapped]');
+  const fresh = el.cloneNode(true);
+  for (const n of [fresh, ...fresh.querySelectorAll('*')]) for (const a of [...n.attributes]) if (a.name.startsWith('data-lpz-')) n.removeAttribute(a.name);
+  el.replaceWith(fresh);
+  return fresh.textContent.replace(/\s+/g, ' ').trim().slice(0, 40);
+});
+// A settings write makes the content script re-apply at once, before its scan sees the swap.
+await worker.evaluate(() => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({ settings: { ...settings, swapProbe: Date.now() } })));
+await page.waitForFunction((t) => [...document.querySelectorAll('[data-lpz-zapped]')].some((e) => e.textContent.replace(/\s+/g, ' ').includes(t)), swapped, { timeout: 10000 });
+await settle();
+assert.equal((await zappedTexts()).length, beforeSwap, 'a swapped-in node is judged again, and nothing else is restored');
+console.log(`node swap after scoring: ${beforeSwap} hidden before and after; the replacement was zapped again`);
+
+// --- In-browser model (core/in-browser.js) ------------------------------------
+// With "ask it first" on but no model downloaded, the gate fails open: every
+// block still goes to the model, and the page is scored as without it.
+let ibRun = 0;
+// Scoring is done when the model has had no new request for a second (at most 15 s).
+const modelQuiet = async () => {
+  let last = -1;
+  for (let t = 0; t < 15000 && last !== modelCalls; t += 1000) {
+    last = modelCalls;
+    await page.waitForTimeout(1000);
+  }
+};
+const ibSettings = (patch) => ({
+  threshold: 0.65, scorer: 'model', hideUnmatched: false,
+  // Its own model name, so blocks scored earlier in this check are not in the score cache.
+  model: { api: 'systemone', endpoint: modelEndpoint, model: `stand-in-ib-${ibRun++}`, concurrency: 2 },
+  inBrowser: { gate: true, gateAt: 0.1 }, ...patch
+});
+await page.goto('about:blank');
+await worker.evaluate((settings) => chrome.storage.local.set({ settings }), ibSettings({}));
+await worker.evaluate(() => chrome.storage.session.remove('scoreCache'));
+modelCalls = 0;
+await page.goto(pageUrl);
+await modelQuiet();
+await settle();
+const ibBlocks = await page.$$eval('[data-lpz-id]', (els) => new Set(els.map((e) => e.getAttribute('data-lpz-id'))).size);
+assert.ok(modelCalls >= ibBlocks - 1, `gate without a downloaded model: every block still reaches the model (${modelCalls} of ${ibBlocks})`);
+assert.equal(await isZapped('incident report'), false);
+console.log(`in-browser gate, no model downloaded: ${modelCalls} of ${ibBlocks} blocks went to the model (fails open)`);
+
+// With a downloaded model (LENSZAP_IB_MODEL_DIR, e.g. eval/data/models/Xenova/nli-deberta-v3-small
+// from npm run browser-scorer -- --kind nli --model Xenova/nli-deberta-v3-small --download),
+// seed the extension's model cache from it and check the real thing: needs WebGPU, so a headed run.
+const ibDir = process.env.LENSZAP_IB_MODEL_DIR;
+if (ibDir) {
+  const { readFileSync: rf, existsSync: ex } = await import('node:fs');
+  const meta = JSON.parse(rf(join(ibDir, 'lenszap-browser.json'), 'utf8'));
+  const files = ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'special_tokens_map.json', meta.dtype === 'fp16' ? 'onnx/model_fp16.onnx' : 'onnx/model.onnx'].filter((f) => ex(join(ibDir, f)));
+  const fileServer = createServer((req, res) => {
+    const f = decodeURIComponent(req.url.slice(1));
+    if (!files.includes(f)) return res.writeHead(404).end();
+    res.writeHead(200, { 'access-control-allow-origin': '*' });
+    res.end(rf(join(ibDir, f)));
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => fileServer.once('listening', r));
+  const ext = await context.newPage();
+  await ext.goto(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
+  const bytes = await ext.evaluate(async ({ base, files, dtype }) => {
+    const { IN_BROWSER_MODEL, MODEL_CACHE } = await import(chrome.runtime.getURL('core/in-browser.js'));
+    const cache = await caches.open(MODEL_CACHE);
+    let n = 0;
+    for (const f of files) {
+      const blob = await (await fetch(base + f)).blob();
+      n += blob.size;
+      await cache.put(`https://models.lenszap.invalid/${IN_BROWSER_MODEL}/${f}`, new Response(blob));
+    }
+    await cache.put(`https://models.lenszap.invalid/${IN_BROWSER_MODEL}/lenszap.json`, new Response(JSON.stringify({ model: IN_BROWSER_MODEL, dtype, files, bytes: n })));
+    return n;
+  }, { base: `http://127.0.0.1:${fileServer.address().port}/`, files, dtype: meta.dtype });
+  fileServer.close();
+  const status = await ext.evaluate(() => chrome.runtime.sendMessage({ type: 'ib-status' }));
+  assert.ok(status.downloaded, 'seeded model shows as downloaded');
+  const t = await ext.evaluate(() => chrome.runtime.sendMessage({ type: 'ib-test' }));
+  assert.ok(!t.error, `ib-test: ${t.error}`);
+  const [cyber, sport] = t.scores.map((x) => x.matches['school cybersecurity']);
+  assert.ok(cyber > 0.5 && sport < 0.2, `in-browser model: ransomware ${cyber}, football ${sport}`);
+  const warm = await ext.evaluate(() => chrome.runtime.sendMessage({ type: 'ib-test' }));
+  console.log(`in-browser model: ${Math.round(bytes / 1e6)} MB ${meta.dtype} on ${status.webgpu ? `WebGPU ${status.vendor} ${status.architecture}` : 'the CPU'}; test ${t.ms} ms cold, ${warm.ms} ms warm`);
+
+  // The gate in front of the stand-in model: fewer model calls than blocks, same safety.
+  await page.goto('about:blank');
+  await worker.evaluate(() => chrome.storage.session.remove('scoreCache'));
+  await worker.evaluate((settings) => chrome.storage.local.set({ settings }), ibSettings({}));
+  modelCalls = 0;
+  const g0 = Date.now();
+  await page.goto(pageUrl);
+  await page.waitForTimeout(1500); // the in-browser pass, before any model request
+  await modelQuiet();
+  await settle();
+  assert.ok(modelCalls < ibBlocks, `gate: the model saw fewer blocks than the page has (${modelCalls} of ${ibBlocks})`);
+  assert.equal(await isZapped('incident report'), false, 'gate: the on-topic paragraph stays');
+  assert.equal(await isZapped('Correction:'), false, 'gate: corrections stay');
+  console.log(`in-browser gate: ${modelCalls} of ${ibBlocks} blocks went to the model; hidden ${(await zappedTexts()).length}; ${Date.now() - g0} ms`);
+
+  // The in-browser model alone.
+  await page.goto('about:blank');
+  await worker.evaluate((settings) => chrome.storage.local.set({ settings }), ibSettings({ scorer: 'browser' }));
+  modelCalls = 0;
+  await page.goto(pageUrl);
+  await page.waitForTimeout(3000);
+  await settle();
+  assert.equal(modelCalls, 0, 'in-browser scorer: nothing goes to the model server');
+  assert.equal(await isZapped('incident report'), false);
+  console.log(`in-browser scorer alone: hidden ${(await zappedTexts()).length}, 0 model requests`);
+  await ext.evaluate(() => chrome.runtime.sendMessage({ type: 'ib-delete' }));
+  await ext.close();
+}
 
 await context.close();
 server.close();

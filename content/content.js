@@ -83,7 +83,8 @@
   const labels = new Map(); // id → 'keep' | 'zap', marked in training mode on this page
   let decisions = [];
   let decisionById = new Map();
-  // Which scorer runs here: 'lexical', 'model', 'hosted', or 'none' (a site
+  // Which scorer runs here: 'lexical', 'model', 'hosted', 'browser' (the
+  // in-browser model, run by the service worker like a model), or 'none' (a site
   // the reader kept off the hosted model: nothing is scored or sent).
   const scorerKind = () => state.scoring?.scorer ?? state.settings.scorer;
   let scorerId = scorerKind() === 'lexical' ? LEXICAL_SCORER_ID : scorerKind() === 'none' ? 'none (kept off the hosted model)' : 'model (not yet run)';
@@ -238,6 +239,25 @@
     return ids;
   }
 
+  /**
+   * Forget blocks the page has taken out of the document (a site re-rendering
+   * while it hydrates). Their replacements carry no block id, so the next scan
+   * registers them afresh. A detached block can't be seen, so it is never in
+   * the ledger: without this, scores that arrive before the swap leave the
+   * ledger naming blocks the page no longer has, and everything is restored.
+   */
+  function prune() {
+    for (const [id, b] of blocks) {
+      if (!b.els.some((el) => el.isConnected)) {
+        blocks.delete(id);
+        scores.delete(id);
+        restored.delete(id);
+        labels.delete(id);
+        adSlots.delete(id);
+      }
+    }
+  }
+
   /** Find new blocks; returns their ids. Blocks already registered are kept. */
   function scan() {
     // An ad slot that has since filled with text (stories loaded into it) is not
@@ -249,15 +269,7 @@
         blocks.delete(id); scores.delete(id); adSlots.delete(id);
       }
     }
-    for (const [id, b] of blocks) {
-      if (!b.els.some((el) => el.isConnected)) {
-        blocks.delete(id);
-        scores.delete(id);
-        restored.delete(id);
-        labels.delete(id);
-        adSlots.delete(id);
-      }
-    }
+    prune();
     const added = [];
     if (rule) {
       for (const item of document.querySelectorAll(rule.item)) {
@@ -391,7 +403,7 @@
     // Blocks scored before (on this page or another, since the browser
     // started) come back from the cache at once, wherever they are on the page.
     const gen = generation;
-    send('cached-scores', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics() })
+    send('cached-scores', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), priorities: priorities() })
       .then((res) => {
         if (gen !== generation || !res?.scores?.length) return;
         scorerId = res.scorer;
@@ -431,7 +443,7 @@
         requestLog.push({ n: ids.length, ms: Math.round(performance.now() - sentAt), ok });
         if (requestLog.length > 200) requestLog.shift();
       };
-      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), host })
+      send('score-model', { blocks: ids.map((id) => ({ id, text: blocks.get(id).text })), topics: topics(), priorities: priorities(), host })
         .then((res) => {
           if (gen !== generation) return;
           // The extension heard about a pause before this page did: no scores,
@@ -543,6 +555,7 @@
   }
 
   function apply() {
+    prune();
     const scored = [...blocks.keys()].filter((id) => scores.has(id)).map((id) => scores.get(id));
     // Paused: nothing is decided, so nothing is hidden (zapped blocks come
     // back without animation) and the ledger is empty.

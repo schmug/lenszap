@@ -39,7 +39,11 @@ README "A fast dev loop"). The eval's score cache (`eval/data/cache/`) is a
 developer file under the git-ignored data folder; it is never part of the
 extension, whose score cache stays in `chrome.storage.session`.
 
-No build step and no runtime dependencies: load the directory unpacked.
+No build step and no npm runtime dependencies: load the directory unpacked.
+The one exception is `vendor/`: transformers.js and onnxruntime-web, copied
+unmodified from npm for the in-browser scorer, pinned and hash-checked
+(`vendor/VENDOR.json`, test/repo-checks.mjs). Update them only as
+vendor/README.md says.
 
 ## Rules that are easy to break by accident
 
@@ -77,7 +81,11 @@ No build step and no runtime dependencies: load the directory unpacked.
   Save click, never used on a site with `sites[host].noHosted` (that site is
   scored by nothing) or while paused. The key lives in `hostedKeys`, apart
   from settings, and never reaches pages, the side panel, or debug reports.
-  No other network requests. Local stays the default scorer.
+  The in-browser model (`core/in-browser.js`, `offscreen/scorer.js`) makes
+  one more request, only on the reader's Download click: its files from
+  huggingface.co (`MODEL_ORIGINS`, requested on the click and removed after).
+  It then reads only Cache Storage and `vendor/`. No other network requests.
+  Local stays the default scorer.
 - **Lenses stay history-free.** Nothing about pages read goes into a lens.
   Drafts, per-site settings, and training marks are local Adaptation State.
   Training marks hold scores and a label only: no text, no URL.
