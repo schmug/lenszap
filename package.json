@@ -22,7 +22,8 @@
     "eval": "node eval/run.mjs",
     "compare-models": "node eval/compare-models.mjs",
     "history-lens": "node --no-warnings=ExperimentalWarning eval/history-lens.mjs",
-    "browser-scorer": "node eval/browser-scorer.mjs"
+    "browser-scorer": "node eval/browser-scorer.mjs",
+    "two-pass": "node eval/two-pass.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

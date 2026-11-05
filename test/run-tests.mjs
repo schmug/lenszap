@@ -1086,5 +1086,28 @@ await test('eval browser scorer: cosine rescale, model paths, and the local-only
   assert.equal(apiForKind('nli'), 'systemone');
 });
 
+await test('eval two-pass: early, union, and skip combine a fast and a slow scorer', async () => {
+  const { twoPass } = await import('../eval/two-pass-lib.mjs');
+  const priorities = [{ topic: 'security', weight: 1 }, { topic: 'gossip', weight: -1 }];
+  const m = (sec, gos) => ({ security: sec, gossip: gos });
+  const labels = { a: 'zap', b: 'keep', c: 'zap', d: 'keep' };
+  // a: both zap. b: fast zaps, slow keeps (a wanted flicker). c: only slow zaps, and fast is unsure. d: both keep.
+  const fast = [{ id: 'a', matches: m(0, 0.9) }, { id: 'b', matches: m(0, 0.9) }, { id: 'c', matches: m(0, 0.3) }, { id: 'd', matches: m(0.9, 0) }];
+  const slow = [{ id: 'a', matches: m(0, 0.9) }, { id: 'b', matches: m(0.9, 0) }, { id: 'c', matches: m(0, 0.9) }, { id: 'd', matches: m(0.9, 0) }];
+  const r = twoPass([{ labels, fast, slow }], { priorities, fastAt: 0.7, slowAt: 0.65, skipBelow: 0.2 });
+  assert.equal(r.slow.totals.keptHidden.length, 0);
+  assert.equal(r.slow.totals.zapMissed.length, 0);
+  assert.equal(r.union.totals.keptHidden.length, 1, 'union keeps the fast pass\'s mistake');
+  assert.deepEqual(r.early.flickerWanted, ['b']);
+  assert.equal(r.early.hiddenEarly, 1);
+  assert.equal(r.early.slowCorrectZaps, 2);
+  // d is rated on-lens by the fast pass (offLens 0), so the slow pass skips it.
+  assert.equal(r.skip.skipped, 1);
+  assert.equal(r.skip.slowCalls, 3);
+  assert.equal(r.skip.totals.zapMissed.length, 0);
+  const strict = twoPass([{ labels, fast, slow }], { priorities, fastAt: 0.7, slowAt: 0.65, skipBelow: 0.5 });
+  assert.deepEqual(strict.skip.totals.zapMissed, ['c'], 'skipping a block the fast pass underrated misses it');
+});
+
 console.log(`lenszap: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
